@@ -1,5 +1,8 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted } from 'vue'
+import { useTts } from '@/composables/useTts'
+
+const { speak, stop, isEnabled, isSupported } = useTts()
 
 function getWsUrl(path: string = '/ws'): string {
   const baseUrl = import.meta.env.VITE_BACKEND_URL || 'http://localhost:3000'
@@ -24,7 +27,9 @@ function connect() {
   }
 
   socket.onmessage = (event: MessageEvent) => {
-    messages.value.push(event.data)
+    const text = typeof event.data === 'string' ? event.data : ''
+    messages.value.push(text)
+    speak(text)
   }
 
   socket.onclose = () => {
@@ -47,6 +52,7 @@ onMounted(() => {
 })
 
 onUnmounted(() => {
+  stop()
   socket?.close()
 })
 </script>
@@ -68,8 +74,16 @@ onUnmounted(() => {
         </span>
       </div>
 
-      <div class="text-xs text-base-content/60 font-mono">
-        Derived Target: {{ wsUrl }}
+      <div class="flex items-center justify-between bg-base-200 px-3 py-2 rounded-box text-xs">
+        <span class="font-mono text-base-content/60">{{ wsUrl }}</span>
+        <label v-if="isSupported" class="label cursor-pointer gap-2 py-0">
+          <span class="label-text text-xs font-semibold">TTS</span>
+          <input
+            v-model="isEnabled"
+            type="checkbox"
+            class="toggle toggle-primary toggle-xs"
+          />
+        </label>
       </div>
 
       <div class="h-64 overflow-y-auto border border-base-300 rounded-box p-3 bg-base-200 flex flex-col gap-2">
@@ -79,7 +93,7 @@ onUnmounted(() => {
         <div
           v-for="(msg, idx) in messages"
           :key="idx"
-          class="p-2 bg-base-100 rounded text-sm break-words shadow-xs"
+          class="p-2 bg-base-100 rounded text-sm wrap-break-words shadow-xs"
         >
           {{ msg }}
         </div>
