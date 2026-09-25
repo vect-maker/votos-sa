@@ -1,10 +1,9 @@
 use crate::cli::ProjectArgs;
 use crate::constants::*;
 use nle_cloud_sdk::models::{
-    ActuatorAddUpdate, DeviceAddUpdateDto, DeviceFuzzyQryPagingParas, ProjectAddUpdateDto,
-    ProjectFuzzyQryPagingParas, SensorAddUpdate,
+    ActuatorAddUpdate, DeviceAddUpdateDto, DeviceQueryParams, ProjectAddUpdateDto,
+    ProjectQueryParams, SensorAddUpdate,
 };
-use nle_cloud_sdk::prelude::*;
 
 type AnyResult<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
@@ -107,12 +106,11 @@ pub async fn provision_device(
     device_tag: &str,
 ) -> AnyResult<i32> {
     tracing::info!("Checking for existing device (Name: '{device_name}', Tag: '{device_tag}') in project {project_id}...");
-    let query = DeviceFuzzyQryPagingParas {
-        tag: Some(device_tag.to_string()),
-        project_key_word: Some(project_id.to_string()),
-        page_size: Some(100),
-        ..Default::default()
-    };
+    let query = DeviceQueryParams::builder()
+        .tag(device_tag)
+        .project_key_word(project_id.to_string())
+        .page_size(100)
+        .build();
 
     let paged = client.get_devices(&query, None).await?;
     let existing = paged
@@ -132,12 +130,12 @@ pub async fn provision_device(
         }
         None => {
             println!("Device '{device_name}' (Tag: '{device_tag}') not found. Provisioning new device...");
-            let dto = DeviceAddUpdateDto::new(
-                project_id.to_string(),
-                device_name,
-                device_tag,
-                DeviceProtocol::Tcp.into(),
-            );
+            let dto = DeviceAddUpdateDto::builder()
+                .project_id_or_tag(project_id.to_string())
+                .name(device_name)
+                .tag(device_tag)
+                .protocol(DeviceProtocol::Tcp)
+                .build();
             let id = client.add_device(&dto, None).await?;
             println!("Successfully provisioned device '{device_name}' (ID: {id}, Tag: '{device_tag}')");
             id
@@ -166,15 +164,15 @@ pub async fn populate_device_peripherals(
         println!("Sensor '{TAG_BRIGHTNESS}' already exists on device '{device_name}'.");
     } else {
         println!("Adding sensor '{TAG_BRIGHTNESS}' (LDR, Float, {SENSOR_UNIT_FLUX}) to device '{device_name}'...");
-        let brightness_sensor = SensorAddUpdate {
-            name: SENSOR_NAME_BRIGHTNESS.to_string(),
-            api_tag: TAG_BRIGHTNESS.to_string(),
-            trans_type: TransType::ReportOnly.into(),
-            data_type: DataType::Float.into(),
-            type_attrs: Some(SENSOR_TYPE_LDR.to_string()),
-            unit: Some(SENSOR_UNIT_FLUX.to_string()),
-            precision: 2,
-        };
+        let brightness_sensor = SensorAddUpdate::builder()
+            .name(SENSOR_NAME_BRIGHTNESS)
+            .api_tag(TAG_BRIGHTNESS)
+            .trans_type(TransType::ReportOnly)
+            .data_type(DataType::Float)
+            .type_attrs(SENSOR_TYPE_LDR)
+            .unit(SENSOR_UNIT_FLUX)
+            .precision(2)
+            .build();
         client.add_sensor(device_id, &brightness_sensor, None).await?;
         println!("Successfully added sensor '{TAG_BRIGHTNESS}' to device '{device_name}'.");
     }
@@ -189,16 +187,14 @@ pub async fn populate_device_peripherals(
         println!("Actuator '{TAG_SERVO_X}' already exists on device '{device_name}'.");
     } else {
         println!("Adding actuator '{TAG_SERVO_X}' (Scale, 0-{SERVO_MAX_ANGLE}{SERVO_UNIT_DEGREE}) to device '{device_name}'...");
-        let servo_x = ActuatorAddUpdate {
-            name: ACTUATOR_NAME_SERVO_X.to_string(),
-            api_tag: TAG_SERVO_X.to_string(),
-            trans_type: TransType::ReportAndControl.into(),
-            data_type: DataType::Float.into(),
-            type_attrs: None,
-            oper_type: ActuatorOperType::Scale.into(),
-            oper_type_attrs: None,
-            serial_number: 1,
-        };
+        let servo_x = ActuatorAddUpdate::builder()
+            .name(ACTUATOR_NAME_SERVO_X)
+            .api_tag(TAG_SERVO_X)
+            .trans_type(TransType::ReportAndControl)
+            .data_type(DataType::Float)
+            .oper_type(ActuatorOperType::Scale)
+            .serial_number(1)
+            .build();
         client.add_sensor(device_id, &servo_x, None).await?;
         println!("Successfully added actuator '{TAG_SERVO_X}' to device '{device_name}'.");
     }
@@ -213,16 +209,14 @@ pub async fn populate_device_peripherals(
         println!("Actuator '{TAG_SERVO_Y}' already exists on device '{device_name}'.");
     } else {
         println!("Adding actuator '{TAG_SERVO_Y}' (Scale, 0-{SERVO_MAX_ANGLE}{SERVO_UNIT_DEGREE}) to device '{device_name}'...");
-        let servo_y = ActuatorAddUpdate {
-            name: ACTUATOR_NAME_SERVO_Y.to_string(),
-            api_tag: TAG_SERVO_Y.to_string(),
-            trans_type: TransType::ReportAndControl.into(),
-            data_type: DataType::Float.into(),
-            type_attrs: None,
-            oper_type: ActuatorOperType::Scale.into(),
-            oper_type_attrs: None,
-            serial_number: 2,
-        };
+        let servo_y = ActuatorAddUpdate::builder()
+            .name(ACTUATOR_NAME_SERVO_Y)
+            .api_tag(TAG_SERVO_Y)
+            .trans_type(TransType::ReportAndControl)
+            .data_type(DataType::Float)
+            .oper_type(ActuatorOperType::Scale)
+            .serial_number(2)
+            .build();
         client.add_sensor(device_id, &servo_y, None).await?;
         println!("Successfully added actuator '{TAG_SERVO_Y}' to device '{device_name}'.");
     }
@@ -240,16 +234,14 @@ pub async fn populate_device_peripherals(
             println!("Actuator '{tag}' already exists on device '{device_name}'.");
         } else {
             println!("Adding boolean actuator '{tag}' (Switch) to device '{device_name}'...");
-            let actuator = ActuatorAddUpdate {
-                name: name.to_string(),
-                api_tag: tag.to_string(),
-                trans_type: TransType::ReportAndControl.into(),
-                data_type: DataType::Boolean.into(),
-                type_attrs: None,
-                oper_type: ActuatorOperType::Switch.into(),
-                oper_type_attrs: None,
-                serial_number: serial,
-            };
+            let actuator = ActuatorAddUpdate::builder()
+                .name(name)
+                .api_tag(tag)
+                .trans_type(TransType::ReportAndControl)
+                .data_type(DataType::Boolean)
+                .oper_type(ActuatorOperType::Switch)
+                .serial_number(serial)
+                .build();
             client.add_sensor(device_id, &actuator, None).await?;
             println!("Successfully added actuator '{tag}' to device '{device_name}'.");
         }
@@ -263,11 +255,10 @@ pub async fn provision(args: &ProjectArgs) -> AnyResult<()> {
     let client = get_client(args).await?;
 
     tracing::info!("Searching for existing project '{project_name}'...");
-    let query = ProjectFuzzyQryPagingParas {
-        keyword: Some(project_name.clone()),
-        page_size: Some(100),
-        ..Default::default()
-    };
+    let query = ProjectQueryParams::builder()
+        .keyword(project_name.clone())
+        .page_size(100)
+        .build();
 
     let paged = client.get_projects(&query, None).await?;
     let existing = paged
@@ -287,7 +278,13 @@ pub async fn provision(args: &ProjectArgs) -> AnyResult<()> {
         }
         None => {
             println!("Project '{project_name}' not found. Provisioning new project...");
-            let dto = ProjectAddUpdateDto::new(&project_name, args.industry, args.network_kind);
+            let industry = IndustryKind::try_from(args.industry).unwrap_or(IndustryKind::SmartHome);
+            let net_work_kind = NetworkKind::try_from(args.network_kind).unwrap_or(NetworkKind::Wifi);
+            let dto = ProjectAddUpdateDto::builder()
+                .name(&project_name)
+                .industry(industry)
+                .net_work_kind(net_work_kind)
+                .build();
             let id = client.add_project(&dto, None).await?;
             println!("Successfully provisioned project '{project_name}' (ID: {id})");
             id
@@ -313,11 +310,10 @@ pub async fn delete(args: &ProjectArgs) -> AnyResult<()> {
     let client = get_client(args).await?;
 
     tracing::info!("Searching for project '{project_name}' to delete...");
-    let query = ProjectFuzzyQryPagingParas {
-        keyword: Some(project_name.clone()),
-        page_size: Some(100),
-        ..Default::default()
-    };
+    let query = ProjectQueryParams::builder()
+        .keyword(project_name.clone())
+        .page_size(100)
+        .build();
 
     let paged = client.get_projects(&query, None).await?;
     let matching: Vec<_> = paged
