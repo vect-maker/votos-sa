@@ -1,8 +1,8 @@
 use crate::cli::ProjectArgs;
 use crate::constants::*;
 use nle_cloud_sdk::models::{
-    DeviceAddUpdateDto, DeviceFuzzyQryPagingParas, ProjectAddUpdateDto, ProjectFuzzyQryPagingParas,
-    SensorAddUpdate,
+    ActuatorAddUpdate, DeviceAddUpdateDto, DeviceFuzzyQryPagingParas, ProjectAddUpdateDto,
+    ProjectFuzzyQryPagingParas, SensorAddUpdate,
 };
 use nle_cloud_sdk::prelude::*;
 
@@ -156,14 +156,13 @@ pub async fn populate_device_peripherals(
     device_id: i32,
     device_name: &str,
 ) -> AnyResult<()> {
-    // 1. Check if the brightness sensor already exists
-    let sensor_exists = client
+    // 1. Light LDR Sensor (brightness, float, flux)
+    let brightness_exists = client
         .get_sensor_info(device_id, TAG_BRIGHTNESS, None)
         .await
         .is_ok();
 
-    // 2. Light LDR Sensor (brightness, float, flux)
-    if sensor_exists {
+    if brightness_exists {
         println!("Sensor '{TAG_BRIGHTNESS}' already exists on device '{device_name}'.");
     } else {
         println!("Adding sensor '{TAG_BRIGHTNESS}' (LDR, Float, {SENSOR_UNIT_FLUX}) to device '{device_name}'...");
@@ -178,6 +177,82 @@ pub async fn populate_device_peripherals(
         };
         client.add_sensor(device_id, &brightness_sensor, None).await?;
         println!("Successfully added sensor '{TAG_BRIGHTNESS}' to device '{device_name}'.");
+    }
+
+    // 2. Servo X Actuator (Scale 0..180 deg)
+    let servo_x_exists = client
+        .get_sensor_info(device_id, TAG_SERVO_X, None)
+        .await
+        .is_ok();
+
+    if servo_x_exists {
+        println!("Actuator '{TAG_SERVO_X}' already exists on device '{device_name}'.");
+    } else {
+        println!("Adding actuator '{TAG_SERVO_X}' (Scale, 0-{SERVO_MAX_ANGLE}{SERVO_UNIT_DEGREE}) to device '{device_name}'...");
+        let servo_x = ActuatorAddUpdate {
+            name: ACTUATOR_NAME_SERVO_X.to_string(),
+            api_tag: TAG_SERVO_X.to_string(),
+            trans_type: TransType::ReportAndControl.into(),
+            data_type: DataType::Float.into(),
+            type_attrs: None,
+            oper_type: ActuatorOperType::Scale.into(),
+            oper_type_attrs: None,
+            serial_number: 1,
+        };
+        client.add_sensor(device_id, &servo_x, None).await?;
+        println!("Successfully added actuator '{TAG_SERVO_X}' to device '{device_name}'.");
+    }
+
+    // 3. Servo Y Actuator (Scale 0..180 deg)
+    let servo_y_exists = client
+        .get_sensor_info(device_id, TAG_SERVO_Y, None)
+        .await
+        .is_ok();
+
+    if servo_y_exists {
+        println!("Actuator '{TAG_SERVO_Y}' already exists on device '{device_name}'.");
+    } else {
+        println!("Adding actuator '{TAG_SERVO_Y}' (Scale, 0-{SERVO_MAX_ANGLE}{SERVO_UNIT_DEGREE}) to device '{device_name}'...");
+        let servo_y = ActuatorAddUpdate {
+            name: ACTUATOR_NAME_SERVO_Y.to_string(),
+            api_tag: TAG_SERVO_Y.to_string(),
+            trans_type: TransType::ReportAndControl.into(),
+            data_type: DataType::Float.into(),
+            type_attrs: None,
+            oper_type: ActuatorOperType::Scale.into(),
+            oper_type_attrs: None,
+            serial_number: 2,
+        };
+        client.add_sensor(device_id, &servo_y, None).await?;
+        println!("Successfully added actuator '{TAG_SERVO_Y}' to device '{device_name}'.");
+    }
+
+    // 4. Boolean Switch Actuators (lamp, fan, lock)
+    let boolean_actuators = [
+        (TAG_LAMP, ACTUATOR_NAME_LAMP, 3),
+        (TAG_FAN, ACTUATOR_NAME_FAN, 4),
+        (TAG_LOCK, ACTUATOR_NAME_LOCK, 5),
+    ];
+
+    for (tag, name, serial) in boolean_actuators {
+        let exists = client.get_sensor_info(device_id, tag, None).await.is_ok();
+        if exists {
+            println!("Actuator '{tag}' already exists on device '{device_name}'.");
+        } else {
+            println!("Adding boolean actuator '{tag}' (Switch) to device '{device_name}'...");
+            let actuator = ActuatorAddUpdate {
+                name: name.to_string(),
+                api_tag: tag.to_string(),
+                trans_type: TransType::ReportAndControl.into(),
+                data_type: DataType::Boolean.into(),
+                type_attrs: None,
+                oper_type: ActuatorOperType::Switch.into(),
+                oper_type_attrs: None,
+                serial_number: serial,
+            };
+            client.add_sensor(device_id, &actuator, None).await?;
+            println!("Successfully added actuator '{tag}' to device '{device_name}'.");
+        }
     }
 
     Ok(())
