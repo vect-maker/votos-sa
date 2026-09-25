@@ -8,13 +8,12 @@ ENV RUSTFLAGS="-C link-arg=-fuse-ld=lld"
 
 COPY . .
 
-# Production release build with cache mounts and symbol stripping
+# Debug build with persistent caches for fast incremental rebuilds
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \
     --mount=type=cache,target=/workspace/target \
-    cargo build --release && \
-    strip /workspace/target/release/backend && \
-    cp /workspace/target/release/backend /tmp/backend_bin
+    cargo build && \
+    cp /workspace/target/debug/backend /tmp/backend_bin
 
 # Runtime Stage
 FROM alpine:3.21 AS runtime

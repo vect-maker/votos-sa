@@ -13,9 +13,9 @@
         reverse_proxy server:3000
     }
 
-    # Frontend Vite dev server (and Vite HMR WebSocket)
+    # Frontend upstream (defaults to production static-web-server on :8787, or :5173 in debug mode)
     handle {
-        reverse_proxy frontend:5173
+        reverse_proxy {$FRONTEND_UPSTREAM:frontend:8787}
     }
 }
 

@@ -1,0 +1,21 @@
+services:
+  caddy:
+    environment:
+      - FRONTEND_UPSTREAM=frontend:5173
+
+  frontend:
+    image: node:26-alpine
+    working_dir: /app
+    command: sh -c "test -d node_modules/vite || npm install; npm run dev"
+    volumes:
+      - ./frontend:/app:z
+      # Anonymous volume prevents host and container node_modules collision
+      - /app/node_modules
+    environment:
+      - VITE_API_BASE_URL=/api
+      - VITE_EVENTS_URL=/api/events
+
+  server:
+    build:
+      context: ./backend
+      dockerfile: debug.Dockerfile
