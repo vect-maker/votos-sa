@@ -938,8 +938,7 @@ dependencies = [
 [[package]]
 name = "nle-cloud-sdk"
 version = "0.1.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "087b9248beee6ac4a5f2c5d755fc8a27ea66f093a28b5417475c3e3c3c6befcc"
+source = "git+https://github.com/vect-maker/nle-cloud-rust-sdk#003dbe64bf8d7c88eda287785cdc89a89b574326"
 dependencies = [
  "chrono",
  "reqwest",
