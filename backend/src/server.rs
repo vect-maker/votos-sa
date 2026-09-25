@@ -142,7 +142,7 @@ async fn health_handler() -> impl IntoResponse {
     Json(serde_json::json!({ "status": "ok" }))
 }
 
-pub async fn run(args: ServeArgs) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+pub async fn run(args: ServeArgs) -> anyhow::Result<()> {
     let project_name = args.project.resolved_name();
 
     // 1. Authenticate with NLECloud

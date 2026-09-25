@@ -5,7 +5,7 @@ use nle_cloud_sdk::models::{
     ProjectQueryParams, SensorAddUpdate,
 };
 
-type AnyResult<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
+use anyhow::{bail, Result as AnyResult};
 
 pub async fn get_client(args: &ProjectArgs) -> AnyResult<NleCloudClient> {
     let env_base_url = std::env::var("NLE_BASE_URL").ok();
@@ -51,7 +51,7 @@ pub async fn get_client(args: &ProjectArgs) -> AnyResult<NleCloudClient> {
             tracing::info!("Successfully authenticated with NLECloud.");
             Ok(client.with_token(login_res.access_token))
         }
-        _ => Err("NLECloud credentials required. Please set NLE_ACCOUNT and NLE_PASSWORD in your .env file (see .env.example) or provide them via CLI options (--account, --password).".into()),
+        _ => bail!("NLECloud credentials required. Please set NLE_ACCOUNT and NLE_PASSWORD in your .env file (see .env.example) or provide them via CLI options (--account, --password)."),
     }
 }
 

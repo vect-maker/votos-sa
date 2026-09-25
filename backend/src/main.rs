@@ -9,7 +9,7 @@ use cli::{Cli, Commands, ProjectCommand};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+async fn main() -> anyhow::Result<()> {
     // Load environment variables from .env file (first current dir, then parent dir)
     let _ = dotenvy::dotenv();
     let _ = dotenvy::from_filename("../.env");

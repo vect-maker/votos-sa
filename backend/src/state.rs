@@ -5,17 +5,25 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
-type AnyResult<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
+use anyhow::{anyhow, bail, Result as AnyResult};
 
 /// Simplified in-memory snapshot of a device.
 /// Only keeps the most critical data for frontend consumption.
+/// If the device is offline or data cannot be fetched, `sensors` is `None` (`null` in JSON).
+/// The online status is cleanly inferred from `sensors != null`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DeviceSnapshot {
     pub device_id: i32,
     pub name: String,
     pub tag: String,
-    pub is_online: bool,
-    pub sensors: HashMap<String, serde_json::Value>,
+    pub sensors: Option<HashMap<String, serde_json::Value>>,
+}
+
+impl DeviceSnapshot {
+    /// Inferred online status based on whether sensors telemetry is available.
+    pub fn is_online(&self) -> bool {
+        self.sensors.is_some()
+    }
 }
 
 /// Device abstraction that maintains cached identity and state,
@@ -40,8 +48,7 @@ impl DeviceNode {
                 device_id,
                 name,
                 tag,
-                is_online: false,
-                sensors: HashMap::new(),
+                sensors: None,
             }),
         }
     }
@@ -59,27 +66,42 @@ impl DeviceNode {
             }
         };
 
-        // 2. Query sensor and actuator values via project real-time data endpoint
-        let realtime_items = client
-            .get_project_sensors_realtime(self.project_id, Some(self.device_id), None)
-            .await?;
-
-        let mut write_guard = self.state.write().await;
-        let mut changed = write_guard.is_online != is_online;
-        write_guard.is_online = is_online;
-
-        for item in realtime_items {
-            if let Some(tag) = item.get("ApiTag").and_then(|v| v.as_str()) {
-                if let Some(val) = item.get("Value") {
-                    let previous = write_guard.sensors.insert(tag.to_string(), val.clone());
-                    if previous.as_ref() != Some(val) {
-                        changed = true;
+        // 2. If online, query sensor and actuator values. If offline or failed, sensors is None.
+        let new_sensors = if is_online {
+            match client
+                .get_project_sensors_realtime(self.project_id, Some(self.device_id), None)
+                .await
+            {
+                Ok(realtime_items) => {
+                    let mut map = HashMap::new();
+                    for item in realtime_items {
+                        if let Some(tag) = item.get("ApiTag").and_then(|v| v.as_str()) {
+                            if let Some(val) = item.get("Value") {
+                                map.insert(tag.to_string(), val.clone());
+                            }
+                        }
                     }
+                    Some(map)
+                }
+                Err(e) => {
+                    tracing::warn!("Could not fetch sensors for device {}: {e}", self.device_id);
+                    None
                 }
             }
-        }
+        } else {
+            None
+        };
+
+        let mut write_guard = self.state.write().await;
+        let changed = write_guard.sensors != new_sensors;
+        write_guard.sensors = new_sensors;
 
         Ok(changed)
+    }
+
+    /// Checks whether this device is currently online.
+    pub async fn is_online(&self) -> bool {
+        self.state.read().await.is_online()
     }
 
     /// Returns a snapshot of the current device state.
@@ -129,9 +151,9 @@ impl ProjectManager {
             .into_iter()
             .find(|p| p.name.as_deref() == Some(project_name))
             .ok_or_else(|| {
-                Box::<dyn std::error::Error + Send + Sync>::from(format!(
+                anyhow!(
                     "Project '{project_name}' not found on NLECloud. Please run `just provision` first."
-                ))
+                )
             })?;
 
         let project_id = prj.project_id;
@@ -254,20 +276,25 @@ impl ProjectManager {
         let mut any_changed = false;
         for dev in &self.devices {
             let mut write_guard = dev.state.write().await;
-            if let Some(&online) = status_map.get(&dev.device_id) {
-                if write_guard.is_online != online {
-                    write_guard.is_online = online;
-                    any_changed = true;
-                }
-            }
+            let online = status_map.get(&dev.device_id).copied().unwrap_or(false);
 
-            if let Some(telemetry) = device_telemetry.get(&dev.device_id) {
-                for (tag, val) in telemetry {
-                    let previous = write_guard.sensors.insert(tag.clone(), val.clone());
-                    if previous.as_ref() != Some(val) {
-                        any_changed = true;
+            let new_sensors = if online {
+                if let Some(telemetry) = device_telemetry.get(&dev.device_id) {
+                    let mut map = HashMap::new();
+                    for (tag, val) in telemetry {
+                        map.insert(tag.clone(), val.clone());
                     }
+                    Some(map)
+                } else {
+                    None
                 }
+            } else {
+                None
+            };
+
+            if write_guard.sensors != new_sensors {
+                write_guard.sensors = new_sensors;
+                any_changed = true;
             }
         }
 
@@ -287,19 +314,14 @@ impl ProjectManager {
         } else {
             self.devices.first()
         }
-        .ok_or_else(|| {
-            Box::<dyn std::error::Error + Send + Sync>::from(
-                "No target device available to send command",
-            )
-        })?;
+        .ok_or_else(|| anyhow!("No target device available to send command"))?;
 
         // Check if device is offline before attempting command
-        let is_online = dev.state.read().await.is_online;
-        if !is_online {
-            return Err(Box::<dyn std::error::Error + Send + Sync>::from(format!(
+        if !dev.is_online().await {
+            bail!(
                 "Device '{}' (ID: {}) is currently offline. Power on the device to control actuators.",
                 dev.name, dev.device_id
-            )));
+            );
         }
 
         // Format switch booleans to 1 / 0 if appropriate for NLECloud actuators
@@ -314,12 +336,12 @@ impl ProjectManager {
             .send_cmd(dev.device_id, api_tag, &send_val, None)
             .await?;
 
-        // Update local state immediately
+        // Update local state immediately if sensors is Some
         {
             let mut write_guard = dev.state.write().await;
-            write_guard
-                .sensors
-                .insert(api_tag.to_string(), send_val.clone());
+            if let Some(ref mut map) = write_guard.sensors {
+                map.insert(api_tag.to_string(), send_val.clone());
+            }
         }
 
         Ok((dev.device_id, send_val))
