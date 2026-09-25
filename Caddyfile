@@ -1,0 +1,31 @@
+{
+    auto_https disable_redirects
+}
+
+(proxy_rules) {
+    # API backend
+    handle /api* {
+        reverse_proxy server:3000
+    }
+
+    # Backend SSE EventSource routes
+    handle /events* {
+        reverse_proxy server:3000
+    }
+
+    # Frontend Vite dev server (and Vite HMR WebSocket)
+    handle {
+        reverse_proxy frontend:5173
+    }
+}
+
+# HTTP listener
+http://localhost:8080, http://:8080 {
+    import proxy_rules
+}
+
+# HTTPS listener with local self-signed certificate
+https://localhost:8443, https://:8443 {
+    tls internal
+    import proxy_rules
+}

@@ -2,17 +2,21 @@
 default:
     @just --list
 
-# Run the backend Axum server
-backend *args="serve":
-    cargo run --manifest-path backend/Cargo.toml -- {{args}}
+# Start all services with podman compose
+up *args="":
+    podman compose up {{args}}
 
-alias server := backend
+# Start and rebuild containers with podman compose
+up-build *args="":
+    podman compose up --build {{args}}
 
-# Run the frontend Vite development server
-frontend:
-    npm --prefix frontend run dev
+# Stop all podman compose containers
+down *args="":
+    podman compose down {{args}}
 
-alias web := frontend
+# View container logs
+logs *args="":
+    podman compose logs -f {{args}}
 
 # Provision the NLECloud project by name (idempotent, defaults to $PROJECT_NAME or smart-home-dock)
 provision *args="":
