@@ -9,7 +9,7 @@ pub struct Cli {
 
 #[derive(Subcommand, Debug)]
 pub enum Commands {
-    /// Start the Axum WebSocket / HTTP server
+    /// Start the Axum HTTP & SSE (Server-Sent Events) server
     #[command(alias = "start", alias = "server")]
     Serve(ServeArgs),
 
@@ -45,6 +45,13 @@ pub struct ServeArgs {
     /// Port to listen on
     #[arg(short, long, env = "PORT", default_value_t = 3000)]
     pub port: u16,
+
+    /// Polling interval in milliseconds for NLECloud device state
+    #[arg(long, env = "POLL_INTERVAL_MS", default_value_t = 2000)]
+    pub poll_interval_ms: u64,
+
+    #[command(flatten)]
+    pub project: ProjectArgs,
 }
 
 #[derive(Args, Debug, Clone)]

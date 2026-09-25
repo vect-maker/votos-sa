@@ -2,13 +2,14 @@ mod cli;
 pub mod constants;
 mod project;
 mod server;
+pub mod state;
 
 use clap::Parser;
 use cli::{Cli, Commands, ProjectCommand};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // Load environment variables from .env file (first current dir, then parent dir)
     let _ = dotenvy::dotenv();
     let _ = dotenvy::from_filename("../.env");
@@ -25,7 +26,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     match cli.command {
         Commands::Serve(args) => {
-            server::run(&args.host, args.port).await?;
+            server::run(args).await?;
         }
         Commands::Project(sub) => match sub {
             ProjectCommand::Provision(args) => {

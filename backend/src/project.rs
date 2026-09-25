@@ -5,7 +5,7 @@ use nle_cloud_sdk::models::{
     ProjectQueryParams, SensorAddUpdate,
 };
 
-type AnyResult<T> = std::result::Result<T, Box<dyn std::error::Error>>;
+type AnyResult<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
 pub async fn get_client(args: &ProjectArgs) -> AnyResult<NleCloudClient> {
     let env_base_url = std::env::var("NLE_BASE_URL").ok();
