@@ -1,120 +1,127 @@
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted } from 'vue'
-import { useTts } from '@/composables/useTts'
+import { onMounted, onUnmounted } from 'vue'
+import { RouterView, RouterLink } from 'vue-router'
+import { useDevicesStore } from '@/stores/devices'
+import { Activity, RefreshCw, Layers } from '@lucide/vue'
 
-const { speak, stop, isEnabled, isSupported } = useTts()
-
-function getWsUrl(path: string = '/ws'): string {
-  const baseUrl = import.meta.env.VITE_BACKEND_URL || 'http://localhost:3000'
-  const wsBase = baseUrl.replace(/^http(s?):\/\//, 'ws$1://').replace(/\/+$/, '')
-  const cleanPath = path.startsWith('/') ? path : `/${path}`
-  return `${wsBase}${cleanPath}`
-}
-
-const wsUrl = getWsUrl('/ws')
-const status = ref<'CONNECTING' | 'OPEN' | 'CLOSED'>('CONNECTING')
-const inputMessage = ref('')
-const messages = ref<string[]>([])
-
-let socket: WebSocket | null = null
-
-function connect() {
-  socket = new WebSocket(wsUrl)
-  status.value = 'CONNECTING'
-
-  socket.onopen = () => {
-    status.value = 'OPEN'
-  }
-
-  socket.onmessage = (event: MessageEvent) => {
-    const text = typeof event.data === 'string' ? event.data : ''
-    messages.value.push(text)
-    speak(text)
-  }
-
-  socket.onclose = () => {
-    status.value = 'CLOSED'
-  }
-
-  socket.onerror = () => {
-    socket?.close()
-  }
-}
-
-function sendMessage() {
-  if (!inputMessage.value.trim() || socket?.readyState !== WebSocket.OPEN) return
-  socket.send(inputMessage.value)
-  inputMessage.value = ''
-}
+const store = useDevicesStore()
 
 onMounted(() => {
-  connect()
+  store.startLiveSync()
+  store.fetchProject()
 })
 
 onUnmounted(() => {
-  stop()
-  socket?.close()
+  store.stopLiveSync()
 })
 </script>
 
 <template>
-  <main class="min-h-screen bg-base-200 p-8 flex flex-col items-center">
-    <div class="card w-full max-w-lg bg-base-100 shadow-xl p-6 flex flex-col gap-4">
-      <div class="flex items-center justify-between">
-        <h1 class="text-xl font-bold">WebSocket Broadcast Test</h1>
-        <span
-          class="badge"
-          :class="{
-            'badge-success': status === 'OPEN',
-            'badge-warning': status === 'CONNECTING',
-            'badge-error': status === 'CLOSED',
-          }"
+  <div class="min-h-screen bg-base-200 text-base-content flex flex-col">
+    <!-- Top Navigation Header -->
+    <header class="bg-base-100 border-b border-base-300 shadow-sm sticky top-0 z-40">
+      <div class="max-w-6xl mx-auto px-4 py-3 flex items-center justify-between gap-4">
+        <!-- Brand / Home Link -->
+        <RouterLink
+          :to="{ name: 'devices-list' }"
+          class="flex items-center gap-3 group"
         >
-          {{ status }}
-        </span>
-      </div>
+          <div class="w-9 h-9 rounded-xl bg-primary text-primary-content flex items-center justify-center shadow-sm group-hover:scale-105 transition-transform">
+            <Activity class="w-5 h-5" />
+          </div>
+          <div>
+            <div class="text-base font-bold tracking-tight flex items-center gap-2">
+              <span>IoT Control Panel</span>
+              <span class="badge badge-xs badge-primary font-normal">v1.0</span>
+            </div>
+            <p class="text-xs text-base-content/60 font-mono">
+              {{ store.project?.name || 'Connecting...' }}
+            </p>
+          </div>
+        </RouterLink>
 
-      <div class="flex items-center justify-between bg-base-200 px-3 py-2 rounded-box text-xs">
-        <span class="font-mono text-base-content/60">{{ wsUrl }}</span>
-        <label v-if="isSupported" class="label cursor-pointer gap-2 py-0">
-          <span class="label-text text-xs font-semibold">TTS</span>
-          <input
-            v-model="isEnabled"
-            type="checkbox"
-            class="toggle toggle-primary toggle-xs"
-          />
-        </label>
-      </div>
+        <!-- Right Header Status & Controls -->
+        <div class="flex items-center gap-2.5">
+          <!-- Live Status Badge -->
+          <div
+            class="badge gap-1.5 py-2.5 px-3 text-xs font-semibold"
+            :class="store.isConnected ? 'badge-success text-success-content' : 'badge-warning text-warning-content'"
+          >
+            <span
+              class="w-2 h-2 rounded-full"
+              :class="store.isConnected ? 'bg-success-content animate-pulse' : 'bg-warning-content animate-ping'"
+            ></span>
+            <span class="hidden sm:inline">
+              {{ store.isConnected ? 'Live' : 'Connecting...' }}
+            </span>
+            <span class="sm:hidden">
+              {{ store.isConnected ? 'Live' : 'Connecting' }}
+            </span>
+          </div>
 
-      <div class="h-64 overflow-y-auto border border-base-300 rounded-box p-3 bg-base-200 flex flex-col gap-2">
-        <div v-if="messages.length === 0" class="text-center text-sm text-base-content/50 my-auto">
-          No broadcast messages yet.
+          <!-- Navigation link to Devices -->
+          <RouterLink
+            :to="{ name: 'devices-list' }"
+            class="btn btn-ghost btn-sm gap-1.5 text-xs hidden md:inline-flex"
+          >
+            <Layers class="w-4 h-4" />
+            <span>Devices</span>
+          </RouterLink>
+
+          <!-- Manual Refresh Button -->
+          <button
+            class="btn btn-outline btn-sm gap-1.5 text-xs"
+            :disabled="store.isFetching"
+            title="Refresh device data"
+            @click="store.fetchProject()"
+          >
+            <RefreshCw class="w-3.5 h-3.5" :class="{ 'animate-spin': store.isFetching }" />
+            <span class="hidden sm:inline">Refresh</span>
+          </button>
         </div>
-        <div
-          v-for="(msg, idx) in messages"
-          :key="idx"
-          class="p-2 bg-base-100 rounded text-sm wrap-break-words shadow-xs"
-        >
-          {{ msg }}
+      </div>
+    </header>
+
+    <!-- Main Content Shell -->
+    <main class="flex-1 max-w-6xl w-full mx-auto p-4 sm:p-6 lg:p-8">
+      <!-- Global Error Notification -->
+      <div v-if="store.error" class="alert alert-error shadow-lg mb-6">
+        <svg xmlns="http://www.w3.org/2000/svg" class="stroke-current shrink-0 h-6 w-6" fill="none" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2m7-2a9 9 0 11-18 0 9 9 0 0118 0z" />
+        </svg>
+        <div class="flex-1">
+          <h3 class="font-bold text-sm">System Notification</h3>
+          <div class="text-xs opacity-90">{{ store.error }}</div>
         </div>
+        <button class="btn btn-xs btn-ghost" @click="store.error = null">Dismiss</button>
       </div>
 
-      <form @submit.prevent="sendMessage" class="flex gap-2">
-        <input
-          v-model="inputMessage"
-          type="text"
-          placeholder="Type a broadcast message..."
-          class="input input-bordered flex-1"
-          :disabled="status !== 'OPEN'"
-        />
-        <button
-          type="submit"
-          class="btn btn-primary"
-          :disabled="status !== 'OPEN' || !inputMessage.trim()"
-        >
-          Send
-        </button>
-      </form>
-    </div>
-  </main>
+      <!-- Router View with transition -->
+      <RouterView v-slot="{ Component }">
+        <transition name="fade" mode="out-in">
+          <component :is="Component" />
+        </transition>
+      </RouterView>
+    </main>
+
+    <!-- Simple Footer -->
+    <footer class="py-4 border-t border-base-300 text-center text-xs text-base-content/50">
+      <div class="max-w-6xl mx-auto px-4 flex flex-col sm:flex-row items-center justify-between gap-2">
+        <span>IoT Device Management Panel</span>
+        <span class="font-mono">Project ID: {{ store.project?.project_id || '...' }}</span>
+      </div>
+    </footer>
+  </div>
 </template>
+
+<style scoped>
+.fade-enter-active,
+.fade-leave-active {
+  transition: opacity 0.15s ease;
+}
+
+.fade-enter-from,
+.fade-leave-to {
+  opacity: 0;
+}
+</style>
