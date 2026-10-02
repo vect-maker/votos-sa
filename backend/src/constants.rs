@@ -15,6 +15,8 @@ pub const TAG_SERVO_Y: &str = "servo_y";
 pub const TAG_LAMP: &str = "lamp";
 pub const TAG_FAN: &str = "fan";
 pub const TAG_LOCK: &str = "lock";
+pub const TAG_SERVO_HOME: &str = "servo_home";
+pub const TAG_CALIBRATE_LIGHT: &str = "calibrate_light";
 
 /// Maximum physical servo rotation limit in degrees
 pub const SERVO_MAX_ANGLE: u16 = 180;

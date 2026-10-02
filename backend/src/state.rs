@@ -6,6 +6,7 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 
 use anyhow::{anyhow, bail, Result as AnyResult};
+use crate::constants::{TAG_SERVO_HOME, TAG_SERVO_X, TAG_SERVO_Y};
 
 /// Simplified in-memory snapshot of a device.
 /// Only keeps the most critical data for frontend consumption.
@@ -455,6 +456,24 @@ impl ProjectManager {
                     ttl: self.command_ttl,
                 },
             );
+            if api_tag == TAG_SERVO_HOME {
+                pending_guard.insert(
+                    TAG_SERVO_X.to_string(),
+                    PendingCommand {
+                        value: serde_json::json!(90),
+                        sent_at: std::time::Instant::now(),
+                        ttl: self.command_ttl,
+                    },
+                );
+                pending_guard.insert(
+                    TAG_SERVO_Y.to_string(),
+                    PendingCommand {
+                        value: serde_json::json!(90),
+                        sent_at: std::time::Instant::now(),
+                        ttl: self.command_ttl,
+                    },
+                );
+            }
         }
 
         // 2. Update local state immediately so snapshot reflects it
@@ -463,10 +482,18 @@ impl ProjectManager {
             match write_guard.sensors {
                 Some(ref mut map) => {
                     map.insert(api_tag.to_string(), send_val.clone());
+                    if api_tag == TAG_SERVO_HOME {
+                        map.insert(TAG_SERVO_X.to_string(), serde_json::json!(90));
+                        map.insert(TAG_SERVO_Y.to_string(), serde_json::json!(90));
+                    }
                 }
                 None => {
                     let mut map = HashMap::new();
                     map.insert(api_tag.to_string(), send_val.clone());
+                    if api_tag == TAG_SERVO_HOME {
+                        map.insert(TAG_SERVO_X.to_string(), serde_json::json!(90));
+                        map.insert(TAG_SERVO_Y.to_string(), serde_json::json!(90));
+                    }
                     write_guard.sensors = Some(map);
                 }
             }

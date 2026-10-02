@@ -500,6 +500,10 @@ fn render_ui(f: &mut Frame, state: &SimulatedDeviceState, args: &SimulateArgs) {
         Span::raw(" Servo X   "),
         Span::styled(" [↓/↑] ", Style::default().fg(Color::Black).bg(Color::LightCyan).add_modifier(Modifier::BOLD)),
         Span::raw(" Servo Y   "),
+        Span::styled(" [h] ", Style::default().fg(Color::Black).bg(Color::Blue).add_modifier(Modifier::BOLD)),
+        Span::raw(" Home   "),
+        Span::styled(" [c] ", Style::default().fg(Color::Black).bg(Color::Yellow).add_modifier(Modifier::BOLD)),
+        Span::raw(" Calibrate Light "),
         Span::styled(" [t] ", Style::default().fg(Color::Black).bg(Color::Magenta).add_modifier(Modifier::BOLD)),
         Span::raw(" Telemetry Tick "),
     ]);
@@ -720,6 +724,55 @@ pub async fn run(args: SimulateArgs) -> Result<()> {
                             tracing::info!(servo_y = state.servo_y, "Locally adjusted Servo Y (t: 3)");
                         }
 
+                        // Home Servos (h)
+                        if key.code == KeyCode::Char('h') {
+                            state.servo_x = 90;
+                            state.servo_y = 90;
+                            seq += 1;
+                            let payload = json!({
+                                "t": 3,
+                                "datatype": 1,
+                                "datas": {
+                                    TAG_SERVO_X: state.servo_x,
+                                    TAG_SERVO_Y: state.servo_y
+                                },
+                                "msgid": seq
+                            });
+                            let mut b = serde_json::to_vec(&payload)?;
+                            b.push(b'\r');
+                            socket.write_all(&b).await?;
+                            state.packets_sent += 1;
+                            tracing::info!("Locally reset servos to home position (t: 3)");
+                        }
+
+                        // Calibrate Light (c)
+                        if key.code == KeyCode::Char('c') {
+                            state.servo_x = 115;
+                            state.servo_y = 55;
+                            state.record_brightness(238.5);
+                            seq += 1;
+                            let payload = json!({
+                                "t": 3,
+                                "datatype": 1,
+                                "datas": {
+                                    TAG_SERVO_X: state.servo_x,
+                                    TAG_SERVO_Y: state.servo_y,
+                                    TAG_BRIGHTNESS: state.brightness,
+                                },
+                                "msgid": seq
+                            });
+                            let mut b = serde_json::to_vec(&payload)?;
+                            b.push(b'\r');
+                            socket.write_all(&b).await?;
+                            state.packets_sent += 1;
+                            tracing::info!(
+                                servo_x = state.servo_x,
+                                servo_y = state.servo_y,
+                                lux = state.brightness,
+                                "Locally triggered light mapping calibration (t: 3)"
+                            );
+                        }
+
                         // Force Telemetry Tick (t)
                         if key.code == KeyCode::Char('t') {
                             let elapsed = sim_start.elapsed().as_secs_f64();
@@ -876,6 +929,52 @@ pub async fn run(args: SimulateArgs) -> Result<()> {
                                                 state.servo_y = angle;
                                                 reported_json_val = json!(angle);
                                             }
+                                        }
+                                        TAG_SERVO_HOME => {
+                                            state.servo_x = 90;
+                                            state.servo_y = 90;
+                                            seq += 1;
+                                            let report_payload = json!({
+                                                "t": 3,
+                                                "datatype": 1,
+                                                "datas": {
+                                                    TAG_SERVO_X: state.servo_x,
+                                                    TAG_SERVO_Y: state.servo_y,
+                                                },
+                                                "msgid": seq
+                                            });
+                                            let mut rep_bytes = serde_json::to_vec(&report_payload)?;
+                                            rep_bytes.push(b'\r');
+                                            socket.write_all(&rep_bytes).await?;
+                                            state.packets_sent += 1;
+                                            tracing::info!(msgid = seq, "Servos homed to (90, 90) and reported to cloud (t: 3)");
+                                        }
+                                        TAG_CALIBRATE_LIGHT => {
+                                            state.servo_x = 115;
+                                            state.servo_y = 55;
+                                            state.record_brightness(238.5);
+                                            seq += 1;
+                                            let report_payload = json!({
+                                                "t": 3,
+                                                "datatype": 1,
+                                                "datas": {
+                                                    TAG_SERVO_X: state.servo_x,
+                                                    TAG_SERVO_Y: state.servo_y,
+                                                    TAG_BRIGHTNESS: state.brightness,
+                                                },
+                                                "msgid": seq
+                                            });
+                                            let mut rep_bytes = serde_json::to_vec(&report_payload)?;
+                                            rep_bytes.push(b'\r');
+                                            socket.write_all(&rep_bytes).await?;
+                                            state.packets_sent += 1;
+                                            tracing::info!(
+                                                servo_x = state.servo_x,
+                                                servo_y = state.servo_y,
+                                                lux = state.brightness,
+                                                msgid = seq,
+                                                "Completed light mapping calibration and reported to cloud (t: 3)"
+                                            );
                                         }
                                         unknown => {
                                             tracing::warn!(tag = %unknown, "Received command for unknown actuator tag");

@@ -1,7 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref, computed, watch } from 'vue'
 import { useDevicesApi } from '@/api/modules/devices/useDevicesApi'
-import { TAG_BRIGHTNESS } from '@/api/modules/devices/domain'
+import { TAG_BRIGHTNESS, TAG_SERVO_HOME, TAG_SERVO_X, TAG_SERVO_Y } from '@/api/modules/devices/domain'
 import type {
   ControlRequest,
   ControlResponse,
@@ -135,6 +135,10 @@ export const useDevicesStore = defineStore('devices', () => {
             targetDev.sensors = {}
           }
           targetDev.sensors[payload.tag] = res.value
+          if (payload.tag === TAG_SERVO_HOME) {
+            targetDev.sensors[TAG_SERVO_X] = 90
+            targetDev.sensors[TAG_SERVO_Y] = 90
+          }
         }
       }
       return res

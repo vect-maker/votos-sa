@@ -39,6 +39,8 @@ TIM_HandleTypeDef htim3;
 #define TAG_LOCK "lock"
 #define TAG_SERVO_X "servo_x"
 #define TAG_SERVO_Y "servo_y"
+#define TAG_SERVO_HOME "servo_home"
+#define TAG_CALIBRATE_LIGHT "calibrate_light"
 
 
 #define KEY2_LONG_THRESHOLD_MS 800
@@ -668,18 +670,33 @@ void ESP8266_DataAnalysisProcess(char *RxBuf) {
   }
 
   /* 6. Home command */
-  if (strstr(RxBuf, "\"solar_home\"") != NULL) {
+  if (strstr(RxBuf, "\"" TAG_SERVO_HOME "\"") != NULL) {
     Servo_Home();
     executed = 1;
+  }
+
+  /* 7. Light Mapping / Best Light Calibration */
+  if (strstr(RxBuf, "\"" TAG_CALIBRATE_LIGHT "\"") != NULL) {
+    /* Send command ACK (t: 6) immediately before beginning the multi-step mapping sweep,
+       ensuring the NLECloud REST request does not time out while servos calibrate. */
+    char ack_buf[64];
+    if (build_cmd_response(ack_buf, sizeof(ack_buf), cmdid, 0, 0) > 0) {
+      SendDataToServer(ack_buf);
+    }
+    CalibrateServosToLight();
+    valorLDR = g_best_light;
+    executed = 2; /* t:6 already delivered; t:3 will report new angles & lux */
   }
 
   if (!executed && !has_error)
     return;
 
   /* --- Step A: Send Command Response (t: 6) as required by NLECloud protocol --- */
-  char cmd_resp[64];
-  if (build_cmd_response(cmd_resp, sizeof(cmd_resp), cmdid, has_error ? 1 : 0, 0) > 0) {
-    SendDataToServer(cmd_resp);
+  if (executed != 2) {
+    char cmd_resp[64];
+    if (build_cmd_response(cmd_resp, sizeof(cmd_resp), cmdid, has_error ? 1 : 0, 0) > 0) {
+      SendDataToServer(cmd_resp);
+    }
   }
 
   /* --- Step B: In NLECloud, the actuator automatically creates a state with the same name.

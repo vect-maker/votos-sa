@@ -10,12 +10,15 @@ import {
   TAG_LOCK,
   TAG_SERVO_X,
   TAG_SERVO_Y,
+  TAG_SERVO_HOME,
+  TAG_CALIBRATE_LIGHT,
   SERVO_X_MIN_ANGLE,
   SERVO_X_MAX_ANGLE,
   SERVO_Y_MIN_ANGLE,
   SERVO_Y_MAX_ANGLE,
   ACTUATOR_SWITCH_TAGS,
   ACTUATOR_SERVO_TAGS,
+  ACTUATOR_BUTTON_TAGS,
 } from '@/api/modules/devices/domain'
 import {
   SwitchRoot,
@@ -43,6 +46,8 @@ import {
   Unlock,
   Activity,
   Sliders,
+  RotateCcw,
+  Radar,
   AlertCircle,
 } from '@lucide/vue'
 
@@ -164,6 +169,7 @@ const environmentalSensors = computed(() => {
     TAG_BRIGHTNESS,
     ...ACTUATOR_SWITCH_TAGS,
     ...ACTUATOR_SERVO_TAGS,
+    ...ACTUATOR_BUTTON_TAGS,
   ]
   for (const [tag, val] of Object.entries(device.value.sensors)) {
     if (!excludedTags.includes(tag)) {
@@ -172,6 +178,46 @@ const environmentalSensors = computed(() => {
   }
   return res
 })
+
+async function triggerHomePosition() {
+  if (!isOnline.value || !device.value) return
+  commandLoading.value[TAG_SERVO_HOME] = true
+  localServoX.value = 90
+  localServoY.value = 90
+
+  try {
+    await store.sendControl({
+      device_id: device.value.device_id,
+      tag: TAG_SERVO_HOME,
+      value: 1,
+    })
+  } catch (err) {
+    console.error(`Failed to send ${TAG_SERVO_HOME}:`, err)
+  } finally {
+    commandLoading.value[TAG_SERVO_HOME] = false
+    setTimeout(() => {
+      localServoX.value = null
+      localServoY.value = null
+    }, 600)
+  }
+}
+
+async function triggerCalibrateLight() {
+  if (!isOnline.value || !device.value) return
+  commandLoading.value[TAG_CALIBRATE_LIGHT] = true
+
+  try {
+    await store.sendControl({
+      device_id: device.value.device_id,
+      tag: TAG_CALIBRATE_LIGHT,
+      value: 1,
+    })
+  } catch (err) {
+    console.error(`Failed to send ${TAG_CALIBRATE_LIGHT}:`, err)
+  } finally {
+    commandLoading.value[TAG_CALIBRATE_LIGHT] = false
+  }
+}
 
 function onServoXUpdate(values?: number[]) {
   if (values && typeof values[0] === 'number') {
@@ -636,6 +682,58 @@ const brightnessValue = computed<number | null>(() => {
                   <span>45°</span>
                   <span>90°</span>
                 </div>
+              </div>
+
+              <!-- Home Servos (Momentary Action Button) -->
+              <div class="p-3.5 bg-base-200/60 rounded-box border border-base-300/60 flex items-center justify-between gap-3">
+                <div class="flex items-center gap-3">
+                  <div class="w-9 h-9 rounded-lg bg-base-300 flex items-center justify-center text-primary shrink-0">
+                    <RotateCcw class="w-4 h-4" />
+                  </div>
+                  <div>
+                    <div class="text-sm font-semibold">Home Position</div>
+                    <div class="text-[10px] text-base-content/50 font-mono">tag: {{ TAG_SERVO_HOME }} • 90°, 90°</div>
+                  </div>
+                </div>
+
+                <button
+                  class="btn btn-sm btn-outline btn-primary gap-1.5"
+                  :disabled="!isOnline || commandLoading[TAG_SERVO_HOME]"
+                  @click="triggerHomePosition"
+                >
+                  <span
+                    v-if="commandLoading[TAG_SERVO_HOME]"
+                    class="loading loading-spinner loading-xs"
+                  ></span>
+                  <RotateCcw v-else class="w-3.5 h-3.5" />
+                  <span>Reset Servos</span>
+                </button>
+              </div>
+
+              <!-- Light Calibration / Mapping (Momentary Action Button) -->
+              <div class="p-3.5 bg-base-200/60 rounded-box border border-base-300/60 flex items-center justify-between gap-3">
+                <div class="flex items-center gap-3">
+                  <div class="w-9 h-9 rounded-lg bg-warning/10 text-warning flex items-center justify-center shrink-0">
+                    <Radar class="w-4 h-4" />
+                  </div>
+                  <div>
+                    <div class="text-sm font-semibold">Calibrate Light Tracking</div>
+                    <div class="text-[10px] text-base-content/50 font-mono">tag: {{ TAG_CALIBRATE_LIGHT }} • Auto-find max lux</div>
+                  </div>
+                </div>
+
+                <button
+                  class="btn btn-sm btn-outline btn-warning gap-1.5"
+                  :disabled="!isOnline || commandLoading[TAG_CALIBRATE_LIGHT]"
+                  @click="triggerCalibrateLight"
+                >
+                  <span
+                    v-if="commandLoading[TAG_CALIBRATE_LIGHT]"
+                    class="loading loading-spinner loading-xs"
+                  ></span>
+                  <Radar v-else class="w-3.5 h-3.5" />
+                  <span>Map Light</span>
+                </button>
               </div>
             </div>
           </div>

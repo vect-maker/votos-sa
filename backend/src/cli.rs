@@ -73,7 +73,7 @@ pub struct ProjectArgs {
     )]
     pub name: String,
 
-    /// Path to declarative JSON file defining devices and peripherals (defaults to seed/devices.json)
+    /// Path to declarative JSON file defining devices (defaults to seed/devices.json)
     #[arg(
         short = 'f',
         long,
@@ -81,6 +81,15 @@ pub struct ProjectArgs {
         default_value = "seed/devices.json"
     )]
     pub devices_file: std::path::PathBuf,
+
+    /// Path to declarative JSON file defining peripheral sets (defaults to seed/peripherals.json)
+    #[arg(
+        short = 'p',
+        long,
+        env = "PERIPHERALS_FILE",
+        default_value = "seed/peripherals.json"
+    )]
+    pub peripherals_file: std::path::PathBuf,
 
     /// Optional namespace prefix for device names and tags (defaults to p<project_id>)
     #[arg(long, env = "DEVICE_NAMESPACE")]
@@ -134,6 +143,18 @@ impl ProjectArgs {
             return parent;
         }
         self.devices_file.clone()
+    }
+
+    /// Resolves the peripherals JSON file path, checking both cwd and parent directory.
+    pub fn resolve_peripherals_file(&self) -> std::path::PathBuf {
+        if self.peripherals_file.exists() {
+            return self.peripherals_file.clone();
+        }
+        let parent = std::path::Path::new("..").join(&self.peripherals_file);
+        if parent.exists() {
+            return parent;
+        }
+        self.peripherals_file.clone()
     }
 }
 

@@ -227,11 +227,13 @@ pub async fn provision(args: &ProjectArgs) -> AnyResult<()> {
 
     // 1. Load declarative device definitions from JSON
     let devices_file = args.resolve_devices_file();
-    let seed_devices = crate::seed::load_devices_from_file(&devices_file)?;
+    let peripherals_file = args.resolve_peripherals_file();
+    let seed_devices = crate::seed::load_devices_from_files(&devices_file, Some(&peripherals_file))?;
     tracing::info!(
         count = seed_devices.len(),
-        path = %devices_file.display(),
-        "Loaded declarative device definitions"
+        devices_path = %devices_file.display(),
+        peripherals_path = %peripherals_file.display(),
+        "Loaded declarative device definitions and peripheral sets"
     );
 
     // 2. Discover or create target project
