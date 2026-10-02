@@ -498,82 +498,44 @@ void LCD_DispImg(unsigned char x, unsigned char y, unsigned char wid, unsigned c
 *						unsigned char x,要写入的行
 *						unsigned char lineCount,列计数，用于确定选中左或右半屏幕
 *****************************************************************************/
-void LCD_WriteEnglish(unsigned char x,unsigned char y, unsigned char c)
+void LCD_WriteChar(unsigned char x, unsigned char y, char c)
 {
-    unsigned char i,line,temp;
-    c -= 32;
-    for(i=0; i<2; i++)
+    unsigned char i, line, temp;
+    unsigned char uc = (unsigned char)c;
+    if (uc < 32 || uc > 126)
+        uc = ' ';
+    uc -= 32;
+
+    for (i = 0; i < 2; i++)
     {
-        LCD_Select(x+i,y);
-        temp=i<<3;
-        for(line=0; line<8; line++)
+        LCD_Select(x + i, y);
+        temp = i << 3;
+        for (line = 0; line < 8; line++)
         {
-            if((y+line)==64)
+            if ((y + line) == 64)
             {
-                LCD_Select(x+i,y+line);   //选中右半屏幕
+                LCD_Select(x + i, y + line); // Switch to right half screen
             }
-            LCD_WrData(font8x16[c][line+temp]);//此处的temp用于存放i*8的结果，
+            LCD_WrData(font8x16[uc][line + temp]);
         }
     }
 }
 
-/*****************************************************************************
-* 函数功能:指定位置写一串英文字符串，每行最多可写21个字符
-* 函数接口: void LCD_WriteEnglishString(unsigned char x,unsigned char y,unsigned char *s)
-* 入口参数: unsigned char x,unsigned char y,unsigned char *s
-*						unsigned char x,行值，取值范围0~7
-*						unsigned char y,列值，取值范围0~127
-*						unsigned char *s,s指向待写入的字符串
-*****************************************************************************/
-void LCD_WriteEnglishString(unsigned char x,unsigned char y,unsigned char *s)
+void LCD_WriteString(unsigned char x, unsigned char y, const char *s)
 {
-    unsigned char lineCount=0;
-    while(*s)
+    unsigned char lineCount = 0;
+    while (*s)
     {
-        if(lineCount>120)
-        {   //显示满一行，另起一行
+        if ((y + lineCount) > 120)
+        {   // End of row: wrap to next text line (2 pages down)
             x += 2;
-            LCD_WriteEnglish( x, 0, *s);
-            lineCount=0+8;
+            lineCount = 0;
+            y = 0;
+            if (x > 6)
+                break;
         }
-        else
-        {
-            LCD_WriteEnglish( x, y+lineCount, *s);
-            lineCount+=8;//每个英文字符占用8列
-        }
+        LCD_WriteChar(x, y + lineCount, *s);
+        lineCount += 8; // Each 8x16 character advances 8 horizontal pixels
         s++;
-    }
-}
-
-/*****************************************************************************
-* 函数功能:指定位置显示一个汉字
-* 函数接口: void LCD_WriteChinese(unsigned char x, unsigned char y, unsigned char *img)
-* 入口参数: unsigned char x, unsigned char y, unsigned char wid, unsigned char lon, unsigned char code *img
-*           x-显示起始行, 0~6(一行高度为8个点)
-*           y-显示起始列, 0~111, 超过列显示无效
-*           img-指针，指向待显示的汉字点阵16*16
-*****************************************************************************/
-void LCD_WriteChinese(unsigned char x, unsigned char y, unsigned char *img)
-{
-    LCD_DispImg( x, y, 16, 16, (unsigned char *)img);
-}
-
-/*****************************************************************************
-* 函数功能:指定位置显示一串汉字
-* 函数接口: void LCD_WriteChinese(unsigned char x, unsigned char y, unsigned char *img)
-* 入口参数: unsigned char x, unsigned char y, unsigned char *img, unsigned char len
-*           x-显示起始行, 0~6(一行高度为8个点)
-*           y-显示起始列, 0~111, 超过列显示无效
-*           img-指针，指向待显示的汉字点阵16*16
-*						len-要显示的汉字个数
-*****************************************************************************/
-void LCD_WriteChineseString(unsigned char x, unsigned char y, unsigned char *img, unsigned char len)
-{
-    unsigned char i;
-    for(i=0; i<len; i++)
-    {
-        LCD_WriteChinese(x, y, (unsigned char *)img);
-        y += 16;
-        img += 32;
     }
 }

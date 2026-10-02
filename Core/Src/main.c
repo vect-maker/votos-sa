@@ -223,7 +223,7 @@ uint8_t ESP8266_SendSensor(char *tag, int32_t value) {
   char json[128];
   if (build_data_upload_request(json, sizeof(json), tag, value) < 0) {
     LCD_Clr();
-    LCD_WriteEnglishString(0, 0, (unsigned char *)"Err: JSON Build");
+    LCD_WriteString(0, 0, "Err: JSON Build");
     return -8;
   }
   return SendDataToServer(json);
@@ -435,7 +435,7 @@ int8_t ConnectToServer(void) {
   char json[200];
 
   LCD_Clr();
-  LCD_WriteEnglishString(0, 0, (unsigned char *)"Cargando...");
+  LCD_WriteString(0, 0, "Cargando...");
 
   SendAtCmd("AT+RESTORE");
   HAL_Delay(3000);
@@ -453,21 +453,21 @@ int8_t ConnectToServer(void) {
   }
   if (!at_ok) {
     LCD_Clr();
-    LCD_WriteEnglishString(0, 0, (unsigned char *)"Err: AT Timeout");
+    LCD_WriteString(0, 0, "Err: AT Timeout");
     return -1;
   }
 
   SendAtCmd("AT+CWMODE_CUR=1");
   if (!WaitFor("OK", 3000)) {
     LCD_Clr();
-    LCD_WriteEnglishString(0, 0, (unsigned char *)"Err: CWMODE");
+    LCD_WriteString(0, 0, "Err: CWMODE");
     return -2;
   }
 
   SendAtCmd("ATE0");
   if (!WaitFor("OK", 2000)) {
     LCD_Clr();
-    LCD_WriteEnglishString(0, 0, (unsigned char *)"Err: ATE0");
+    LCD_WriteString(0, 0, "Err: ATE0");
     return -3;
   }
 
@@ -475,7 +475,7 @@ int8_t ConnectToServer(void) {
   SendAtCmd(cmd);
   if (!WaitFor("OK", 20000)) {
     LCD_Clr();
-    LCD_WriteEnglishString(0, 0, (unsigned char *)"Err: WiFi");
+    LCD_WriteString(0, 0, "Err: WiFi");
     return -4;
   }
 
@@ -483,14 +483,14 @@ int8_t ConnectToServer(void) {
   SendAtCmd(cmd);
   if (!WaitFor("CONNECT", 10000)) {
     LCD_Clr();
-    LCD_WriteEnglishString(0, 0, (unsigned char *)"Err: TCP Conn");
+    LCD_WriteString(0, 0, "Err: TCP Conn");
     return -5;
   }
 
   if (build_connection_request(json, sizeof(json), DEVICE_TAG, SECRET_KEY) <
       0) {
     LCD_Clr();
-    LCD_WriteEnglishString(0, 0, (unsigned char *)"Err: JSON Build");
+    LCD_WriteString(0, 0, "Err: JSON Build");
     return -6;
   }
 
@@ -498,7 +498,7 @@ int8_t ConnectToServer(void) {
   SendAtCmd(cmd);
   if (!WaitFor(">", 3000)) {
     LCD_Clr();
-    LCD_WriteEnglishString(0, 0, (unsigned char *)"Err: Send Timeout");
+    LCD_WriteString(0, 0, "Err: Send Timeout");
     return -7;
   }
 
@@ -507,13 +507,13 @@ int8_t ConnectToServer(void) {
 
   if (!WaitFor("SEND OK", 5000)) {
     LCD_Clr();
-    LCD_WriteEnglishString(0, 0, (unsigned char *)"Err: Send Failed");
+    LCD_WriteString(0, 0, "Err: Send Failed");
     return -8;
   }
 
   if (!WaitFor("\"status\":0", 10000)) {
     LCD_Clr();
-    LCD_WriteEnglishString(0, 0, (unsigned char *)"Err: NLE Login");
+    LCD_WriteString(0, 0, "Err: NLE Login");
     char dbg[32];
     memset(dbg, 0, sizeof(dbg));
     char *p = strstr((char *)AT_RX_BUF, "\"status\"");
@@ -528,7 +528,7 @@ int8_t ConnectToServer(void) {
       if (dbg[k] < 32 || dbg[k] > 126)
         dbg[k] = ' ';
     }
-    LCD_WriteEnglishString(2, 0, (unsigned char *)dbg);
+    LCD_WriteString(2, 0, dbg);
     return -9;
   }
 
@@ -777,7 +777,7 @@ void CalibrateServosToLight(void) {
   uint8_t best_light = 0;
 
   LCD_Clr();
-  LCD_WriteEnglishString(0, 0, (unsigned char *)"Buscando luz...");
+  LCD_WriteString(0, 0, "Buscando luz...");
 
   for (uint16_t s1 = SERVO1_MIN_ANGLE;; s1 += CALIB_ANGLE_STEP) {
     uint16_t angle1 = (s1 > SERVO1_MAX_ANGLE) ? SERVO1_MAX_ANGLE : s1;
@@ -798,9 +798,9 @@ void CalibrateServosToLight(void) {
 
       char buf[32];
       sprintf(buf, "A1:%3d A2:%3d", angle1, angle2);
-      LCD_WriteEnglishString(2, 0, (unsigned char *)buf);
+      LCD_WriteString(2, 0, buf);
       sprintf(buf, "LDR:%3d B:%3d", current_light, best_light);
-      LCD_WriteEnglishString(4, 0, (unsigned char *)buf);
+      LCD_WriteString(4, 0, buf);
 
       if (current_light > best_light) {
         best_light = current_light;
@@ -824,12 +824,12 @@ void CalibrateServosToLight(void) {
   g_best_s2 = best_s2;
 
   LCD_Clr();
-  LCD_WriteEnglishString(0, 0, (unsigned char *)"Mejor luz encontrada");
+  LCD_WriteString(0, 0, "Mejor luz encontrada");
   char buf[32];
   sprintf(buf, "S1:%3d S2:%3d", best_s1, best_s2);
-  LCD_WriteEnglishString(2, 0, (unsigned char *)buf);
+  LCD_WriteString(2, 0, buf);
   sprintf(buf, "LDR:%3d", best_light);
-  LCD_WriteEnglishString(4, 0, (unsigned char *)buf);
+  LCD_WriteString(4, 0, buf);
 
   HAL_Delay(3000);
 }
@@ -880,13 +880,13 @@ int main(void) {
   if (result != 0) {
     char errBuf[16];
     sprintf(errBuf, "Codigo: %d", result);
-    LCD_WriteEnglishString(2, 0, (unsigned char *)errBuf);
+    LCD_WriteString(2, 0, errBuf);
     while (1) {
       HAL_Delay(1000);
     }
   } else {
     LCD_Clr();
-    LCD_WriteEnglishString(0, 0, (unsigned char *)"Conectado NLE!");
+    LCD_WriteString(0, 0, "Conectado NLE!");
   }
 
   last_best_decay = HAL_GetTick();
@@ -951,22 +951,22 @@ int main(void) {
       if ((now - last_lcd_update) > 2000) {
         char lcdBuf[32];
         sprintf(lcdBuf, "LDR:%3d ", valorLDR);
-        LCD_WriteEnglishString(2, 0, (unsigned char *)lcdBuf);
+        LCD_WriteString(2, 0, lcdBuf);
 
         sprintf(lcdBuf, "LMP:%s ", lampState ? "ON " : "OFF");
-        LCD_WriteEnglishString(4, 0, (unsigned char *)lcdBuf);
+        LCD_WriteString(4, 0, lcdBuf);
 
         sprintf(lcdBuf, "VEN:%s ", fanState ? "ON " : "OFF");
-        LCD_WriteEnglishString(6, 0, (unsigned char *)lcdBuf);
+        LCD_WriteString(6, 0, lcdBuf);
 
         sprintf(lcdBuf, "LOK:%s ", lockState ? "ON " : "OFF");
-        LCD_WriteEnglishString(2, 64, (unsigned char *)lcdBuf);
+        LCD_WriteString(2, 64, lcdBuf);
 
         sprintf(lcdBuf, "S1:%3d", servo1_angle);
-        LCD_WriteEnglishString(4, 64, (unsigned char *)lcdBuf);
+        LCD_WriteString(4, 64, lcdBuf);
 
         sprintf(lcdBuf, "S2:%3d", servo2_angle);
-        LCD_WriteEnglishString(6, 64, (unsigned char *)lcdBuf);
+        LCD_WriteString(6, 64, lcdBuf);
 
         last_lcd_update = now;
       }
