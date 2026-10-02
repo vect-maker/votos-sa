@@ -15,15 +15,30 @@ async fn main() -> anyhow::Result<()> {
     let _ = dotenvy::dotenv();
     let _ = dotenvy::from_filename("../.env");
 
-    tracing_subscriber::registry()
-        .with(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "info,axum=debug".into()),
-        )
-        .with(tracing_subscriber::fmt::layer())
-        .init();
-
     let cli = Cli::parse();
+
+    match &cli.command {
+        Commands::Simulate(_) => {
+            tui_logger::init_logger(tui_logger::LevelFilter::Trace)?;
+            tui_logger::set_default_level(tui_logger::LevelFilter::Info);
+            tracing_subscriber::registry()
+                .with(
+                    tracing_subscriber::EnvFilter::try_from_default_env()
+                        .unwrap_or_else(|_| "info,backend=trace".into()),
+                )
+                .with(tui_logger::TuiTracingSubscriberLayer)
+                .init();
+        }
+        _ => {
+            tracing_subscriber::registry()
+                .with(
+                    tracing_subscriber::EnvFilter::try_from_default_env()
+                        .unwrap_or_else(|_| "info,axum=debug".into()),
+                )
+                .with(tracing_subscriber::fmt::layer())
+                .init();
+        }
+    }
 
     match cli.command {
         Commands::Serve(args) => {

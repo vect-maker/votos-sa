@@ -16,3 +16,7 @@ clap = { version = "4.6.7", features = ["derive", "env"] }
 dotenvy = "0.15"
 nle-cloud-sdk = { git = "https://github.com/vect-maker/nle-cloud-rust-sdk" }
 anyhow = "1"
+ratatui = "0.30.2"
+crossterm = { version = "0.29.0", features = ["event-stream"] }
+tui-logger = { version = "0.18.3", features = ["tracing-support"] }
+futures-util = "0.3.34"

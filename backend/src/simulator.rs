@@ -2,12 +2,39 @@ use crate::cli::SimulateArgs;
 use crate::constants::*;
 use crate::project::get_client;
 use anyhow::{bail, Context, Result};
+use crossterm::{
+    cursor::{Hide, Show},
+    event::{Event, EventStream, KeyCode, KeyEventKind, KeyModifiers},
+    execute,
+    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
+};
+use futures_util::StreamExt;
 use nle_cloud_sdk::models::{DeviceBaseInfoDto, DeviceQueryParams, ProjectQueryParams};
+use ratatui::{
+    backend::CrosstermBackend,
+    layout::{Alignment, Constraint, Direction, Layout},
+    style::{Color, Modifier, Style},
+    symbols::Marker,
+    text::{Line, Span},
+    widgets::{Axis, Block, Borders, Chart, Dataset, Gauge, GraphType, Paragraph},
+    Frame, Terminal,
+};
 use serde_json::json;
-use std::io::Write;
+use std::io::{stdout, Write};
 use std::time::{Duration, Instant};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpStream;
+use tui_logger::{TuiLoggerLevelOutput, TuiLoggerWidget};
+
+/// RAII Guard ensuring terminal raw mode and alternate screen are always restored.
+struct TerminalGuard;
+
+impl Drop for TerminalGuard {
+    fn drop(&mut self) {
+        let _ = disable_raw_mode();
+        let _ = execute!(stdout(), LeaveAlternateScreen, Show);
+    }
+}
 
 /// Holds the in-memory state of the simulated smart home device.
 #[derive(Debug, Clone)]
@@ -16,6 +43,7 @@ pub struct SimulatedDeviceState {
     pub device_id: Option<i32>,
     pub device_name: Option<String>,
     pub brightness: f32,
+    pub brightness_history: Vec<f64>,
     pub lamp: bool,
     pub fan: bool,
     pub lock: bool,
@@ -34,6 +62,7 @@ impl SimulatedDeviceState {
             device_id,
             device_name: name,
             brightness: 135.5,
+            brightness_history: vec![135.5; 40],
             lamp: false,
             fan: false,
             lock: true,
@@ -46,72 +75,12 @@ impl SimulatedDeviceState {
         }
     }
 
-    /// Renders a terminal status panel displaying all peripherals, online status, and traffic.
-    pub fn render_tui(&self, host: &str, port: u16) {
-        let cyan = "\x1b[36m";
-        let bold_cyan = "\x1b[1;36m";
-        let bold_green = "\x1b[1;32m";
-        let bold_red = "\x1b[1;31m";
-        let yellow = "\x1b[33m";
-        let bold_yellow = "\x1b[1;33m";
-        let dim = "\x1b[2m";
-        let bold = "\x1b[1m";
-        let reset = "\x1b[0m";
-
-        let status_badge = if self.is_online {
-            format!("{bold_green}ONLINE ●{reset}")
-        } else {
-            format!("{bold_red}OFFLINE ○{reset}")
-        };
-
-        let lamp_badge = if self.lamp {
-            format!("{bold_green}[ ON  ]{reset}")
-        } else {
-            format!("{dim}[ OFF ]{reset}")
-        };
-
-        let fan_badge = if self.fan {
-            format!("{bold_green}[ ON  ]{reset}")
-        } else {
-            format!("{dim}[ OFF ]{reset}")
-        };
-
-        let lock_badge = if self.lock {
-            format!("{bold_yellow}[ LOCKED ]{reset}")
-        } else {
-            format!("{bold_green}[ UNLOCKED ]{reset}")
-        };
-
-        let dev_id_str = self
-            .device_id
-            .map(|id| format!(" (ID: {id})"))
-            .unwrap_or_default();
-        let name_str = self
-            .device_name
-            .as_deref()
-            .map(|n| format!(" [{n}]"))
-            .unwrap_or_default();
-        let target_display = format!("{}{dev_id_str}{name_str}", self.device_tag);
-
-        let gateway_display = format!("{host}:{port}");
-        let traffic_display = format!("↑ {:<4} pkts   ↓ {:<4} pkts", self.packets_sent, self.packets_received);
-
-        println!();
-        println!("{bold_cyan}┌─────────────────────── NLECLOUD VIRTUAL DEVICE STATUS ───────────────────────┐{reset}");
-        println!("│ {bold}Device:{reset}  {cyan}{:<30}{reset} Status:  {:<26}│", target_display, status_badge);
-        println!("│ {bold}Gateway:{reset} {dim}{:<30}{reset} Traffic: {:<29}│", gateway_display, traffic_display);
-        println!("{bold_cyan}├──────────────────────────────────────────────────────────────────────────────┤{reset}");
-        println!("│ {bold_yellow}PERIPHERALS{reset}                                                                  │");
-        println!("│   • brightness : {yellow}{:>6.2} flux{reset}                                                 │", self.brightness);
-        println!("│   • lamp       : {:<21}                                       │", lamp_badge);
-        println!("│   • fan        : {:<21}                                       │", fan_badge);
-        println!("│   • lock       : {:<21}                                       │", lock_badge);
-        println!("│   • servo_x    : {cyan}{:>3}°{reset}                                                          │", self.servo_x);
-        println!("│   • servo_y    : {cyan}{:>3}°{reset}                                                          │", self.servo_y);
-        println!("{bold_cyan}├──────────────────────────────────────────────────────────────────────────────┤{reset}");
-        println!("│ {bold}Last Action:{reset} {:<64} │", self.last_event.chars().take(64).collect::<String>());
-        println!("{bold_cyan}└──────────────────────────────────────────────────────────────────────────────┘{reset}");
-        println!();
+    pub fn record_brightness(&mut self, val: f32) {
+        self.brightness = val;
+        self.brightness_history.push(val as f64);
+        if self.brightness_history.len() > 60 {
+            self.brightness_history.remove(0);
+        }
     }
 }
 
@@ -286,12 +255,284 @@ fn parse_u16_value(v: &serde_json::Value) -> Option<u16> {
     None
 }
 
-/// Runs the simulated TCP device lifecycle.
+/// Renders the complete Ratatui TUI dashboard.
+fn render_ui(f: &mut Frame, state: &SimulatedDeviceState, args: &SimulateArgs) {
+    let size = f.area();
+
+    // Root layout: Header (3), Main Body (Min 14), Footer (3)
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(3),
+            Constraint::Min(14),
+            Constraint::Length(3),
+        ])
+        .split(size);
+
+    // --- 1. HEADER BAR ---
+    let status_span = if state.is_online {
+        Span::styled("● ONLINE", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD))
+    } else {
+        Span::styled("○ OFFLINE", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD))
+    };
+
+    let dev_name = state.device_name.as_deref().unwrap_or("N/A");
+    let dev_id_str = state
+        .device_id
+        .map(|id| format!(" (ID: {id})"))
+        .unwrap_or_default();
+
+    let header_line = Line::from(vec![
+        Span::styled(" Device: ", Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            format!("{}{dev_id_str} [{dev_name}]", state.device_tag),
+            Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+        ),
+        Span::raw("   │   "),
+        Span::styled("Status: ", Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+        status_span,
+        Span::raw("   │   "),
+        Span::styled("Gateway: ", Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+        Span::styled(format!("{}:{}", args.gateway_host, args.gateway_port), Style::default().fg(Color::DarkGray)),
+        Span::raw("   │   "),
+        Span::styled("Traffic: ", Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+        Span::styled(format!("↑ {}  ↓ {}", state.packets_sent, state.packets_received), Style::default().fg(Color::Yellow)),
+    ]);
+
+    let header_block = Block::default()
+        .borders(Borders::ALL)
+        .title(" NLECloud IoT Device Simulator ")
+        .title_alignment(Alignment::Center)
+        .border_style(Style::default().fg(Color::Cyan));
+
+    f.render_widget(Paragraph::new(vec![header_line]).block(header_block), chunks[0]);
+
+    // --- 2. MAIN BODY (Left: Peripherals 45%, Right: Tracing Logs 55%) ---
+    let body_chunks = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(45), Constraint::Percentage(55)])
+        .split(chunks[1]);
+
+    // Split Left Column into Actuators (Length 11) and Sensor Chart (Min 6)
+    let left_chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(11), Constraint::Min(6)])
+        .split(body_chunks[0]);
+
+    // Split Actuators block into Buttons (5), Servo X (3), Servo Y (3)
+    let actuator_rows = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(5),
+            Constraint::Length(3),
+            Constraint::Length(3),
+        ])
+        .split(left_chunks[0]);
+
+    // 2.1 Buttons (Lamp, Fan, Lock)
+    let lamp_badge = if state.lamp {
+        Span::styled(" [● ON ] ", Style::default().bg(Color::Green).fg(Color::Black).add_modifier(Modifier::BOLD))
+    } else {
+        Span::styled(" [○ OFF] ", Style::default().bg(Color::DarkGray).fg(Color::White))
+    };
+
+    let fan_badge = if state.fan {
+        Span::styled(" [● ON ] ", Style::default().bg(Color::Green).fg(Color::Black).add_modifier(Modifier::BOLD))
+    } else {
+        Span::styled(" [○ OFF] ", Style::default().bg(Color::DarkGray).fg(Color::White))
+    };
+
+    let lock_badge = if state.lock {
+        Span::styled(" [🔒 LOCKED] ", Style::default().bg(Color::Yellow).fg(Color::Black).add_modifier(Modifier::BOLD))
+    } else {
+        Span::styled(" [🔓 UNLOCKED] ", Style::default().bg(Color::Green).fg(Color::Black).add_modifier(Modifier::BOLD))
+    };
+
+    let buttons_text = vec![
+        Line::from(vec![
+            Span::styled(" Lamp: ", Style::default().add_modifier(Modifier::BOLD)),
+            lamp_badge,
+            Span::styled("   (press 'l' to toggle)", Style::default().fg(Color::DarkGray)),
+        ]),
+        Line::from(vec![
+            Span::styled(" Fan:  ", Style::default().add_modifier(Modifier::BOLD)),
+            fan_badge,
+            Span::styled("   (press 'f' to toggle)", Style::default().fg(Color::DarkGray)),
+        ]),
+        Line::from(vec![
+            Span::styled(" Lock: ", Style::default().add_modifier(Modifier::BOLD)),
+            lock_badge,
+            Span::styled("   (press 'k' to toggle)", Style::default().fg(Color::DarkGray)),
+        ]),
+    ];
+
+    let buttons_block = Block::default()
+        .borders(Borders::ALL)
+        .title(" Actuators: Switches ")
+        .border_style(Style::default().fg(Color::Blue));
+    f.render_widget(Paragraph::new(buttons_text).block(buttons_block), actuator_rows[0]);
+
+    // 2.2 Servo X Gauge (0..180 deg)
+    let x_pct = ((state.servo_x as f32 / 180.0) * 100.0).clamp(0.0, 100.0) as u16;
+    let servo_x_block = Block::default()
+        .borders(Borders::ALL)
+        .title(" Servo X (Horizontal 0-180°) [← / →] ")
+        .border_style(Style::default().fg(Color::Rgb(56, 189, 248)));
+    let servo_x_gauge = Gauge::default()
+        .block(servo_x_block)
+        .gauge_style(
+            Style::default()
+                .fg(Color::Rgb(14, 165, 233))
+                .bg(Color::Rgb(15, 23, 42))
+                .add_modifier(Modifier::BOLD),
+        )
+        .style(Style::default().fg(Color::Rgb(71, 85, 105)).bg(Color::Rgb(15, 23, 42)))
+        .percent(x_pct)
+        .label(format!("{}° / 180°  ({}%)", state.servo_x, x_pct));
+    f.render_widget(servo_x_gauge, actuator_rows[1]);
+
+    // 2.3 Servo Y Gauge (0..180 deg)
+    let y_pct = ((state.servo_y as f32 / 180.0) * 100.0).clamp(0.0, 100.0) as u16;
+    let servo_y_block = Block::default()
+        .borders(Borders::ALL)
+        .title(" Servo Y (Vertical 0-180°) [↓ / ↑] ")
+        .border_style(Style::default().fg(Color::Rgb(192, 132, 252)));
+    let servo_y_gauge = Gauge::default()
+        .block(servo_y_block)
+        .gauge_style(
+            Style::default()
+                .fg(Color::Rgb(168, 85, 247))
+                .bg(Color::Rgb(15, 23, 42))
+                .add_modifier(Modifier::BOLD),
+        )
+        .style(Style::default().fg(Color::Rgb(71, 85, 105)).bg(Color::Rgb(15, 23, 42)))
+        .percent(y_pct)
+        .label(format!("{}° / 180°  ({}%)", state.servo_y, y_pct));
+    f.render_widget(servo_y_gauge, actuator_rows[2]);
+
+    // 2.4 Sensor: Brightness Real-Time Line Graph
+    let brightness_data: Vec<(f64, f64)> = state
+        .brightness_history
+        .iter()
+        .enumerate()
+        .map(|(i, &val)| (i as f64, val))
+        .collect();
+
+    let (min_val, max_val) = state.brightness_history.iter().fold(
+        (state.brightness as f64, state.brightness as f64),
+        |(min, max), &v| (min.min(v), max.max(v)),
+    );
+
+    let y_min = (min_val - 15.0).max(0.0).floor();
+    let y_max = (max_val + 15.0).ceil();
+    let y_mid = ((y_min + y_max) / 2.0).round();
+
+    let num_points = state.brightness_history.len() as f64;
+    let x_max = if num_points > 1.0 { num_points - 1.0 } else { 1.0 };
+
+    let dataset = Dataset::default()
+        .name(format!("{:.2} flux", state.brightness))
+        .marker(Marker::Braille)
+        .graph_type(GraphType::Line)
+        .style(Style::default().fg(Color::Rgb(250, 204, 21))) // Vibrant Golden Amber
+        .data(&brightness_data);
+
+    let x_axis = Axis::default()
+        .bounds([0.0, x_max])
+        .style(Style::default().fg(Color::DarkGray))
+        .labels(["-60s", "-30s", "Now"]);
+
+    let y_axis = Axis::default()
+        .bounds([y_min, y_max])
+        .style(Style::default().fg(Color::DarkGray))
+        .labels([
+            format!("{y_min:.0}"),
+            format!("{y_mid:.0}"),
+            format!("{y_max:.0}"),
+        ]);
+
+    let chart_block = Block::default()
+        .borders(Borders::ALL)
+        .title(format!(" Sensor: Brightness Line Graph ({:.2} flux) ", state.brightness))
+        .border_style(Style::default().fg(Color::Rgb(250, 204, 21)));
+
+    let chart = Chart::new(vec![dataset])
+        .block(chart_block)
+        .x_axis(x_axis)
+        .y_axis(y_axis);
+    f.render_widget(chart, left_chunks[1]);
+
+    // 2.5 Right Column: Live Tracing Event Logs
+    let logger_widget = TuiLoggerWidget::default()
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(" Live Event & Tracing Logs ")
+                .border_style(Style::default().fg(Color::Magenta)),
+        )
+        .output_separator(' ')
+        .output_timestamp(Some("%H:%M:%S".to_string()))
+        .output_level(Some(TuiLoggerLevelOutput::Abbreviated))
+        .output_target(false)
+        .output_file(false)
+        .output_line(false)
+        .style_error(Style::default().fg(Color::Red).add_modifier(Modifier::BOLD))
+        .style_warn(Style::default().fg(Color::Yellow))
+        .style_info(Style::default().fg(Color::Green))
+        .style_debug(Style::default().fg(Color::DarkGray));
+    f.render_widget(logger_widget, body_chunks[1]);
+
+    // --- 3. FOOTER SHORTCUTS BAR ---
+    let help_line = Line::from(vec![
+        Span::styled(" [q] ", Style::default().fg(Color::Black).bg(Color::White).add_modifier(Modifier::BOLD)),
+        Span::raw(" Quit   "),
+        Span::styled(" [l] ", Style::default().fg(Color::Black).bg(Color::Green).add_modifier(Modifier::BOLD)),
+        Span::raw(" Lamp   "),
+        Span::styled(" [f] ", Style::default().fg(Color::Black).bg(Color::Green).add_modifier(Modifier::BOLD)),
+        Span::raw(" Fan   "),
+        Span::styled(" [k] ", Style::default().fg(Color::Black).bg(Color::Yellow).add_modifier(Modifier::BOLD)),
+        Span::raw(" Lock   "),
+        Span::styled(" [←/→] ", Style::default().fg(Color::Black).bg(Color::Cyan).add_modifier(Modifier::BOLD)),
+        Span::raw(" Servo X   "),
+        Span::styled(" [↓/↑] ", Style::default().fg(Color::Black).bg(Color::LightCyan).add_modifier(Modifier::BOLD)),
+        Span::raw(" Servo Y   "),
+        Span::styled(" [t] ", Style::default().fg(Color::Black).bg(Color::Magenta).add_modifier(Modifier::BOLD)),
+        Span::raw(" Telemetry Tick "),
+    ]);
+
+    let footer_p = Paragraph::new(vec![help_line])
+        .alignment(Alignment::Center)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(" Interactive Controls ")
+                .border_style(Style::default().fg(Color::DarkGray)),
+        );
+    f.render_widget(footer_p, chunks[2]);
+}
+
+/// Runs the simulated TCP device lifecycle inside Ratatui and Crossterm.
 pub async fn run(args: SimulateArgs) -> Result<()> {
     let (tag, key, dev_id, dev_name) = resolve_target_device(&args).await?;
 
     let mut state = SimulatedDeviceState::new(tag.clone(), dev_id, dev_name);
     let gateway_addr = format!("{}:{}", args.gateway_host, args.gateway_port);
+
+    // Setup terminal and RAII guard
+    enable_raw_mode()?;
+    execute!(stdout(), EnterAlternateScreen, Hide)?;
+    let _guard = TerminalGuard;
+
+    // Set panic hook to restore terminal cleanly on unexpected panic
+    let original_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |panic_info| {
+        let _ = disable_raw_mode();
+        let _ = execute!(stdout(), LeaveAlternateScreen, Show);
+        original_hook(panic_info);
+    }));
+
+    let backend = CrosstermBackend::new(stdout());
+    let mut terminal = Terminal::new(backend)?;
 
     tracing::info!(
         device = %tag,
@@ -299,12 +540,14 @@ pub async fn run(args: SimulateArgs) -> Result<()> {
         gateway = %gateway_addr,
         "Initiating TCP connection to NLECloud gateway..."
     );
+    terminal.draw(|f| render_ui(f, &state, &args))?;
 
     let mut socket = TcpStream::connect(&gateway_addr)
         .await
         .with_context(|| format!("Failed to connect to NLECloud TCP gateway at {gateway_addr}"))?;
 
     tracing::info!(gateway = %gateway_addr, "TCP connection established.");
+    terminal.draw(|f| render_ui(f, &state, &args))?;
 
     // 1. Handshake request (t: 1)
     let handshake_req = json!({
@@ -316,7 +559,8 @@ pub async fn run(args: SimulateArgs) -> Result<()> {
     handshake_bytes.push(b'\r');
     socket.write_all(&handshake_bytes).await?;
     state.packets_sent += 1;
-    tracing::info!(device = %tag, "Sent gateway handshake (t: 1)");
+    tracing::info!(device = %tag, "Sent gateway handshake request (t: 1)");
+    terminal.draw(|f| render_ui(f, &state, &args))?;
 
     // Wait for handshake response (t: 2)
     let mut initial_buf = [0u8; 1024];
@@ -327,8 +571,6 @@ pub async fn run(args: SimulateArgs) -> Result<()> {
     state.packets_received += 1;
 
     let initial_resp_str = String::from_utf8_lossy(&initial_buf[..n]);
-    tracing::debug!(raw = %initial_resp_str, "Received handshake response");
-
     let handshake_resp: serde_json::Value = serde_json::from_str(initial_resp_str.trim())
         .with_context(|| format!("Failed to parse handshake response: '{initial_resp_str}'"))?;
 
@@ -340,11 +582,9 @@ pub async fn run(args: SimulateArgs) -> Result<()> {
     state.is_online = true;
     state.last_event = "Handshake accepted. Device is ONLINE.".to_string();
     tracing::info!(device = %tag, status = status, "Device is ONLINE on NLECloud TCP gateway.");
+    terminal.draw(|f| render_ui(f, &state, &args))?;
 
-    // Render initial TUI
-    state.render_tui(&args.gateway_host, args.gateway_port);
-
-    // Initial telemetry sync so dashboard immediately sees peripheral values
+    // Initial telemetry sync
     let mut seq: u64 = 1;
     let initial_sync = json!({
         "t": 3,
@@ -366,25 +606,145 @@ pub async fn run(args: SimulateArgs) -> Result<()> {
     tracing::info!(msgid = seq, "Published initial peripheral telemetry state (t: 3)");
 
     let mut telemetry_ticker = tokio::time::interval(Duration::from_secs(args.telemetry_interval_secs));
-    // Consume immediate first tick
     telemetry_ticker.tick().await;
 
     let mut heartbeat_ticker = tokio::time::interval(Duration::from_secs(args.heartbeat_interval_secs));
-    // Consume immediate first tick
     heartbeat_ticker.tick().await;
 
+    let mut event_stream = EventStream::new();
     let mut read_buf = [0u8; 4096];
     let mut incoming_acc = String::new();
     let sim_start = Instant::now();
 
     loop {
+        terminal.draw(|f| render_ui(f, &state, &args))?;
+
         tokio::select! {
+            // Interactive Keyboard & Terminal Events
+            Some(Ok(crossterm_event)) = event_stream.next() => {
+                match crossterm_event {
+                    Event::Key(key) if key.kind == KeyEventKind::Press => {
+                        // Quit
+                        if key.code == KeyCode::Char('q')
+                            || key.code == KeyCode::Esc
+                            || (key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL))
+                        {
+                            tracing::info!("User initiated shutdown via hotkey. Terminating simulator...");
+                            break;
+                        }
+
+                        // Toggle Lamp (l)
+                        if key.code == KeyCode::Char('l') {
+                            state.lamp = !state.lamp;
+                            let val = if state.lamp { 1 } else { 0 };
+                            seq += 1;
+                            let payload = json!({ "t": 3, "datatype": 1, "datas": { TAG_LAMP: val }, "msgid": seq });
+                            let mut b = serde_json::to_vec(&payload)?;
+                            b.push(b'\r');
+                            socket.write_all(&b).await?;
+                            state.packets_sent += 1;
+                            tracing::info!(lamp = state.lamp, "Locally toggled lamp and synced to cloud (t: 3)");
+                        }
+
+                        // Toggle Fan (f)
+                        if key.code == KeyCode::Char('f') {
+                            state.fan = !state.fan;
+                            let val = if state.fan { 1 } else { 0 };
+                            seq += 1;
+                            let payload = json!({ "t": 3, "datatype": 1, "datas": { TAG_FAN: val }, "msgid": seq });
+                            let mut b = serde_json::to_vec(&payload)?;
+                            b.push(b'\r');
+                            socket.write_all(&b).await?;
+                            state.packets_sent += 1;
+                            tracing::info!(fan = state.fan, "Locally toggled fan and synced to cloud (t: 3)");
+                        }
+
+                        // Toggle Lock (k)
+                        if key.code == KeyCode::Char('k') {
+                            state.lock = !state.lock;
+                            let val = if state.lock { 1 } else { 0 };
+                            seq += 1;
+                            let payload = json!({ "t": 3, "datatype": 1, "datas": { TAG_LOCK: val }, "msgid": seq });
+                            let mut b = serde_json::to_vec(&payload)?;
+                            b.push(b'\r');
+                            socket.write_all(&b).await?;
+                            state.packets_sent += 1;
+                            tracing::info!(lock = state.lock, "Locally toggled lock and synced to cloud (t: 3)");
+                        }
+
+                        // Servo X Adjust (Left / Right)
+                        if key.code == KeyCode::Left {
+                            state.servo_x = state.servo_x.saturating_sub(5);
+                            seq += 1;
+                            let payload = json!({ "t": 3, "datatype": 1, "datas": { TAG_SERVO_X: state.servo_x }, "msgid": seq });
+                            let mut b = serde_json::to_vec(&payload)?;
+                            b.push(b'\r');
+                            socket.write_all(&b).await?;
+                            state.packets_sent += 1;
+                            tracing::info!(servo_x = state.servo_x, "Locally adjusted Servo X (t: 3)");
+                        }
+                        if key.code == KeyCode::Right {
+                            state.servo_x = (state.servo_x + 5).min(SERVO_MAX_ANGLE);
+                            seq += 1;
+                            let payload = json!({ "t": 3, "datatype": 1, "datas": { TAG_SERVO_X: state.servo_x }, "msgid": seq });
+                            let mut b = serde_json::to_vec(&payload)?;
+                            b.push(b'\r');
+                            socket.write_all(&b).await?;
+                            state.packets_sent += 1;
+                            tracing::info!(servo_x = state.servo_x, "Locally adjusted Servo X (t: 3)");
+                        }
+
+                        // Servo Y Adjust (Down / Up)
+                        if key.code == KeyCode::Down {
+                            state.servo_y = state.servo_y.saturating_sub(5);
+                            seq += 1;
+                            let payload = json!({ "t": 3, "datatype": 1, "datas": { TAG_SERVO_Y: state.servo_y }, "msgid": seq });
+                            let mut b = serde_json::to_vec(&payload)?;
+                            b.push(b'\r');
+                            socket.write_all(&b).await?;
+                            state.packets_sent += 1;
+                            tracing::info!(servo_y = state.servo_y, "Locally adjusted Servo Y (t: 3)");
+                        }
+                        if key.code == KeyCode::Up {
+                            state.servo_y = (state.servo_y + 5).min(SERVO_MAX_ANGLE);
+                            seq += 1;
+                            let payload = json!({ "t": 3, "datatype": 1, "datas": { TAG_SERVO_Y: state.servo_y }, "msgid": seq });
+                            let mut b = serde_json::to_vec(&payload)?;
+                            b.push(b'\r');
+                            socket.write_all(&b).await?;
+                            state.packets_sent += 1;
+                            tracing::info!(servo_y = state.servo_y, "Locally adjusted Servo Y (t: 3)");
+                        }
+
+                        // Force Telemetry Tick (t)
+                        if key.code == KeyCode::Char('t') {
+                            let elapsed = sim_start.elapsed().as_secs_f64();
+                            let raw_val = 140.0 + 35.0 * (elapsed * 0.1).sin() + 10.0 * (elapsed * 0.28).cos();
+                            state.record_brightness(((raw_val * 100.0).round() / 100.0) as f32);
+
+                            seq += 1;
+                            let payload = json!({
+                                "t": 3,
+                                "datatype": 1,
+                                "datas": { TAG_BRIGHTNESS: state.brightness },
+                                "msgid": seq
+                            });
+                            let mut b = serde_json::to_vec(&payload)?;
+                            b.push(b'\r');
+                            socket.write_all(&b).await?;
+                            state.packets_sent += 1;
+                            tracing::info!(brightness = state.brightness, msgid = seq, "Manual telemetry tick sent (t: 3)");
+                        }
+                    }
+                    _ => {}
+                }
+            }
+
             // Periodic Telemetry upload
             _ = telemetry_ticker.tick() => {
                 let elapsed = sim_start.elapsed().as_secs_f64();
-                // Realistic sinusoidal fluctuation around 140 flux
                 let raw_val = 140.0 + 35.0 * (elapsed * 0.1).sin() + 10.0 * (elapsed * 0.28).cos();
-                state.brightness = ((raw_val * 100.0).round() / 100.0) as f32;
+                state.record_brightness(((raw_val * 100.0).round() / 100.0) as f32);
 
                 seq += 1;
                 let payload = json!({
@@ -402,9 +762,7 @@ pub async fn run(args: SimulateArgs) -> Result<()> {
                     break;
                 }
                 state.packets_sent += 1;
-                state.last_event = format!("Uploaded telemetry: brightness = {:.2} flux", state.brightness);
                 tracing::info!(brightness = state.brightness, msgid = seq, "Uploaded telemetry data (t: 3)");
-                state.render_tui(&args.gateway_host, args.gateway_port);
             }
 
             // Periodic Heartbeat
@@ -423,8 +781,6 @@ pub async fn run(args: SimulateArgs) -> Result<()> {
                     Ok(0) => {
                         tracing::warn!("Gateway closed TCP connection.");
                         state.is_online = false;
-                        state.last_event = "Gateway closed connection".to_string();
-                        state.render_tui(&args.gateway_host, args.gateway_port);
                         break;
                     }
                     Ok(n) => n,
@@ -437,7 +793,6 @@ pub async fn run(args: SimulateArgs) -> Result<()> {
                 state.packets_received += 1;
                 incoming_acc.push_str(&String::from_utf8_lossy(&read_buf[..n]));
 
-                // Process complete framed segments
                 while let Some(pos) = incoming_acc.find(['\r', '\n']) {
                     let frame = incoming_acc[..pos].trim().to_string();
                     incoming_acc.drain(..=pos);
@@ -446,8 +801,8 @@ pub async fn run(args: SimulateArgs) -> Result<()> {
                         continue;
                     }
 
-                    if frame == "$#AT#" {
-                        tracing::debug!("Gateway echoed heartbeat frame ($#AT#)");
+                    if frame.starts_with('$') {
+                        tracing::debug!(frame = %frame, "Gateway heartbeat response received");
                         continue;
                     }
 
@@ -456,12 +811,10 @@ pub async fn run(args: SimulateArgs) -> Result<()> {
                             let msg_type = val.get("t").and_then(|t| t.as_i64()).unwrap_or(0);
                             match msg_type {
                                 4 => {
-                                    // Telemetry ACK (t: 4)
                                     let ack_id = val.get("msgid").and_then(|m| m.as_i64()).unwrap_or(0);
                                     tracing::debug!(msgid = ack_id, "Cloud acknowledged telemetry packet (t: 4)");
                                 }
                                 5 => {
-                                    // Inbound Control Command (t: 5)
                                     let cmdid = val.get("cmdid").cloned().unwrap_or_else(|| json!(0));
                                     let apitag = val.get("apitag").and_then(|a| a.as_str()).unwrap_or("").to_string();
                                     let data = val.get("data").cloned().unwrap_or_else(|| json!(null));
@@ -488,47 +841,40 @@ pub async fn run(args: SimulateArgs) -> Result<()> {
 
                                     // 2. Update state and report updated value via t: 3
                                     let mut reported_json_val = json!(null);
-                                    let mut action_desc = String::new();
 
                                     match apitag.as_str() {
                                         TAG_LAMP => {
                                             if let Some(b) = parse_bool_value(&data) {
                                                 state.lamp = b;
                                                 reported_json_val = json!(if b { 1 } else { 0 });
-                                                action_desc = format!("CMD: lamp -> {}", if b { "ON" } else { "OFF" });
                                             }
                                         }
                                         TAG_FAN => {
                                             if let Some(b) = parse_bool_value(&data) {
                                                 state.fan = b;
                                                 reported_json_val = json!(if b { 1 } else { 0 });
-                                                action_desc = format!("CMD: fan -> {}", if b { "ON" } else { "OFF" });
                                             }
                                         }
                                         TAG_LOCK => {
                                             if let Some(b) = parse_bool_value(&data) {
                                                 state.lock = b;
                                                 reported_json_val = json!(if b { 1 } else { 0 });
-                                                action_desc = format!("CMD: lock -> {}", if b { "LOCKED" } else { "UNLOCKED" });
                                             }
                                         }
                                         TAG_SERVO_X => {
                                             if let Some(angle) = parse_u16_value(&data) {
                                                 state.servo_x = angle;
                                                 reported_json_val = json!(angle);
-                                                action_desc = format!("CMD: servo_x -> {angle}°");
                                             }
                                         }
                                         TAG_SERVO_Y => {
                                             if let Some(angle) = parse_u16_value(&data) {
                                                 state.servo_y = angle;
                                                 reported_json_val = json!(angle);
-                                                action_desc = format!("CMD: servo_y -> {angle}°");
                                             }
                                         }
                                         unknown => {
                                             tracing::warn!(tag = %unknown, "Received command for unknown actuator tag");
-                                            action_desc = format!("CMD: unknown tag '{unknown}'");
                                         }
                                     }
 
@@ -548,9 +894,6 @@ pub async fn run(args: SimulateArgs) -> Result<()> {
                                         state.packets_sent += 1;
                                         tracing::info!(tag = %apitag, msgid = seq, "Synced updated actuator state to cloud (t: 3)");
                                     }
-
-                                    state.last_event = format!("{action_desc} (ACK & State synced)");
-                                    state.render_tui(&args.gateway_host, args.gateway_port);
                                 }
                                 other => {
                                     tracing::debug!(msg_type = other, "Received other message from gateway");
@@ -566,11 +909,7 @@ pub async fn run(args: SimulateArgs) -> Result<()> {
 
             // Graceful shutdown on Ctrl+C
             _ = tokio::signal::ctrl_c() => {
-                println!();
                 tracing::info!("Received interrupt signal (Ctrl+C). Terminating simulator...");
-                state.is_online = false;
-                state.last_event = "Simulator terminated by user".to_string();
-                state.render_tui(&args.gateway_host, args.gateway_port);
                 break;
             }
         }
