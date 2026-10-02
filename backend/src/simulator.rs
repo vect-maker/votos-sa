@@ -148,7 +148,11 @@ pub async fn resolve_target_device(
     let selected_device = if let Some(tag) = &args.device_tag {
         candidate_devices
             .into_iter()
-            .find(|(d, _)| d.tag.as_deref() == Some(tag))
+            .find(|(d, _)| {
+                d.tag.as_deref() == Some(tag)
+                    || d.name.as_deref() == Some(tag)
+                    || d.tag.as_deref().map(|t| t.ends_with(&format!("_{tag}"))).unwrap_or(false)
+            })
             .ok_or_else(|| anyhow::anyhow!("Device with tag '{tag}' not found in NLECloud account"))?
     } else if candidate_devices.len() == 1 {
         // Auto-select single device

@@ -135,7 +135,7 @@ impl ProjectManager {
     pub async fn init_from_cloud(
         client: &NleCloudClient,
         project_name: &str,
-        device_namespace: Option<&str>,
+        _device_namespace: Option<&str>,
     ) -> AnyResult<Self> {
         tracing::info!("Discovering project '{project_name}' on NLECloud...");
 
@@ -164,14 +164,7 @@ impl ProjectManager {
             project_tag
         );
 
-        // 2. Resolve expected device name and tag
-        let (expected_dev_name, expected_dev_tag) = crate::project::resolve_device_name_and_tag(
-            device_namespace,
-            project_id,
-            crate::constants::DEFAULT_DEVICE_BASE_NAME,
-        );
-
-        // 3. Query devices for this project and instantiate DeviceNode
+        // 2. Query devices for this project and instantiate DeviceNode
         tracing::info!("Fetching devices for project ID {project_id}...");
         let dev_query = DeviceQueryParams::builder()
             .project_key_word(project_id.to_string())
@@ -185,23 +178,20 @@ impl ProjectManager {
             let dev_name = dev.name.as_deref().unwrap_or_default();
             let dev_tag = dev.tag.as_deref().unwrap_or_default();
 
-            // Match device by expected name/tag or project ID
-            if dev_name == expected_dev_name || dev_tag == expected_dev_tag || dev.project_id == Some(project_id) {
-                tracing::info!(
-                    "Instantiated device in memory: '{}' (ID: {}, Tag: '{}')",
-                    dev_name,
-                    dev.device_id,
-                    dev_tag
-                );
-                let node = Arc::new(DeviceNode::new(
-                    dev.device_id,
-                    project_id,
-                    dev_name.to_string(),
-                    dev_tag.to_string(),
-                ));
+            tracing::info!(
+                "Instantiated device in memory: '{}' (ID: {}, Tag: '{}')",
+                dev_name,
+                dev.device_id,
+                dev_tag
+            );
+            let node = Arc::new(DeviceNode::new(
+                dev.device_id,
+                project_id,
+                dev_name.to_string(),
+                dev_tag.to_string(),
+            ));
 
-                devices.push(node);
-            }
+            devices.push(node);
         }
 
         if devices.is_empty() {

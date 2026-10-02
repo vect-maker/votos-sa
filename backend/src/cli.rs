@@ -65,7 +65,7 @@ pub struct ProjectArgs {
         short,
         long,
         env = "PROJECT_NAME",
-        default_value = "smart-home-dock"
+        default_value = crate::constants::DEFAULT_PROJECT_NAME
     )]
     pub name: String,
 
@@ -110,7 +110,7 @@ pub struct ProjectArgs {
 impl ProjectArgs {
     /// Resolves the project name, honoring NLE_PROJECT_NAME if PROJECT_NAME was not overridden.
     pub fn resolved_name(&self) -> String {
-        if self.name == "smart-home-dock" {
+        if self.name == crate::constants::DEFAULT_PROJECT_NAME {
             if let Ok(val) = std::env::var("NLE_PROJECT_NAME") {
                 if !val.trim().is_empty() {
                     return val;

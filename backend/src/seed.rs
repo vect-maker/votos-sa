@@ -34,15 +34,21 @@ impl DeviceSeed {
     }
 
     pub fn validate(&self) -> Result<()> {
-        if self.name.len() < 6 || self.name.len() > 15 {
+        if self.name.trim().is_empty() {
+            bail!("Device name cannot be empty");
+        }
+        if self.tag.trim().is_empty() {
+            bail!("Device tag cannot be empty");
+        }
+        if self.name.len() > 15 {
             bail!(
-                "Device name '{}' must be between 6 and 15 characters (NLECloud API limit)",
+                "Device base name '{}' exceeds 15 characters (NLECloud API limit)",
                 self.name
             );
         }
-        if self.tag.len() < 6 || self.tag.len() > 30 {
+        if self.tag.len() > 30 {
             bail!(
-                "Device tag '{}' must be between 6 and 30 characters (NLECloud API limit)",
+                "Device base tag '{}' exceeds 30 characters (NLECloud API limit)",
                 self.tag
             );
         }

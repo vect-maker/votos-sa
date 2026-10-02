@@ -69,8 +69,22 @@ pub fn resolve_device_name_and_tag(
 
     let clean_base = base_name.replace('-', "_");
 
+    // Avoid double prefixing if the name/tag already starts with the prefix
+    let prefix = format!("{}_", ns);
+    let effective_base = if clean_base.starts_with(&prefix) {
+        &clean_base[prefix.len()..]
+    } else if clean_base == ns {
+        ""
+    } else {
+        clean_base.as_str()
+    };
+
     // Tag: 6 to 30 chars, alphanumeric and underscore
-    let mut tag = format!("{}_{}", ns, clean_base);
+    let mut tag = if effective_base.is_empty() {
+        ns.clone()
+    } else {
+        format!("{}_{}", ns, effective_base)
+    };
     if tag.len() > 30 {
         tag.truncate(30);
     }
@@ -79,13 +93,17 @@ pub fn resolve_device_name_and_tag(
     }
 
     // Name: 6 to 15 chars (NLECloud API limit)
-    let suffix = format!("_{}", clean_base);
+    let suffix = if effective_base.is_empty() {
+        String::new()
+    } else {
+        format!("_{}", effective_base)
+    };
     let mut name = if ns.len() + suffix.len() <= 15 {
         format!("{}{}", ns, suffix)
     } else {
         let max_ns = 15usize.saturating_sub(suffix.len()).max(1);
-        let prefix: String = ns.chars().take(max_ns).collect();
-        format!("{}{}", prefix, suffix)
+        let p: String = ns.chars().take(max_ns).collect();
+        format!("{}{}", p, suffix)
     };
     if name.len() > 15 {
         name.truncate(15);
@@ -257,6 +275,26 @@ pub async fn provision(args: &ProjectArgs) -> AnyResult<()> {
             id
         }
     };
+
+    // Automatically apply required cloud prefixes (e.g. p{project_id}_dev1) to user-declared seed devices
+    let seed_devices: Vec<crate::seed::DeviceSeed> = seed_devices
+        .into_iter()
+        .map(|mut d| {
+            let (resolved_name, _) = resolve_device_name_and_tag(
+                args.device_namespace.as_deref(),
+                project_id,
+                &d.name,
+            );
+            let (_, resolved_tag) = resolve_device_name_and_tag(
+                args.device_namespace.as_deref(),
+                project_id,
+                &d.tag,
+            );
+            d.name = resolved_name;
+            d.tag = resolved_tag;
+            d
+        })
+        .collect();
 
     // 3. Query all devices currently attached to this project in the cloud
     let dev_query = DeviceQueryParams::builder()
