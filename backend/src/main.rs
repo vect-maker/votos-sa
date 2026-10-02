@@ -2,6 +2,7 @@ mod cli;
 pub mod constants;
 mod project;
 mod server;
+mod simulator;
 pub mod state;
 
 use clap::Parser;
@@ -41,6 +42,9 @@ async fn main() -> anyhow::Result<()> {
         }
         Commands::Delete(args) => {
             project::delete(&args).await?;
+        }
+        Commands::Simulate(args) => {
+            simulator::run(args).await?;
         }
     }
 

@@ -49,3 +49,9 @@ delete-project *args="":
     cargo run --manifest-path backend/Cargo.toml -- delete {{args}}
 
 alias delete := delete-project
+
+# Run the virtual device simulator over TCP
+simulate *args="":
+    cargo run --manifest-path backend/Cargo.toml -- simulate {{args}}
+
+alias sim := simulate

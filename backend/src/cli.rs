@@ -24,6 +24,10 @@ pub enum Commands {
     /// Delete an NLECloud project by name
     #[command(alias = "delete-project", alias = "destroy")]
     Delete(ProjectArgs),
+
+    /// Run an interactive virtual device simulator over TCP
+    #[command(alias = "sim", alias = "dummy")]
+    Simulate(SimulateArgs),
 }
 
 #[derive(Subcommand, Debug, Clone)]
@@ -106,4 +110,34 @@ impl ProjectArgs {
         }
         self.name.clone()
     }
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct SimulateArgs {
+    /// NLECloud TCP gateway host
+    #[arg(long, env = "NLE_GATEWAY_HOST", default_value = "newgateway.nlecloud.com")]
+    pub gateway_host: String,
+
+    /// NLECloud TCP gateway port
+    #[arg(long, env = "NLE_GATEWAY_PORT", default_value_t = 8600)]
+    pub gateway_port: u16,
+
+    /// Interval in seconds between telemetry data uploads
+    #[arg(long, env = "TELEMETRY_INTERVAL_SECS", default_value_t = 5)]
+    pub telemetry_interval_secs: u64,
+
+    /// Heartbeat interval in seconds
+    #[arg(long, default_value_t = 30)]
+    pub heartbeat_interval_secs: u64,
+
+    /// Target device tag to simulate (if omitted, will query cloud and prompt user)
+    #[arg(short = 'd', long, env = "NLE_DEVICE_TAG")]
+    pub device_tag: Option<String>,
+
+    /// Communication security key of the device (if omitted, fetched from cloud API)
+    #[arg(short = 'k', long, env = "NLE_SECRET_KEY")]
+    pub secret_key: Option<String>,
+
+    #[command(flatten)]
+    pub project: ProjectArgs,
 }
