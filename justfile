@@ -55,3 +55,17 @@ simulate *args="":
     cargo run --manifest-path backend/Cargo.toml -- simulate {{args}}
 
 alias sim := simulate
+
+# Compile the Typst technical document to PDF (document/main.typ -> document/main.pdf)
+doc *args="":
+    typst compile document/main.typ document/main.pdf {{args}}
+
+alias doc-build := doc
+alias build-doc := doc
+
+# Watch and continuously recompile the Typst document upon file changes
+doc-watch *args="":
+    typst watch document/main.typ document/main.pdf {{args}}
+
+alias watch-doc := doc-watch
+
