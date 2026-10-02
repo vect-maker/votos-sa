@@ -1,6 +1,7 @@
 mod cli;
 pub mod constants;
 mod project;
+pub mod seed;
 mod server;
 mod simulator;
 pub mod state;

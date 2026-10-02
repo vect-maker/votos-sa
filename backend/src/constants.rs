@@ -5,6 +5,9 @@
 
 pub use nle_cloud_sdk::prelude::*;
 
+// Default project naming
+pub const DEFAULT_PROJECT_NAME: &str = "smart-home-dock";
+
 // Default device base naming
 pub const DEFAULT_DEVICE_BASE_NAME: &str = "dev1";
 pub const DEFAULT_DEVICE_BASE_TAG: &str = "dev1";

@@ -1,11 +1,12 @@
 use crate::cli::ProjectArgs;
 use crate::constants::*;
+use crate::seed::DeviceSeed;
+use anyhow::{bail, Result as AnyResult};
 use nle_cloud_sdk::models::{
     ActuatorAddUpdate, DeviceAddUpdateDto, DeviceQueryParams, ProjectAddUpdateDto,
     ProjectQueryParams, SensorAddUpdate,
 };
-
-use anyhow::{bail, Result as AnyResult};
+use std::collections::HashSet;
 
 pub async fn get_client(args: &ProjectArgs) -> AnyResult<NleCloudClient> {
     let env_base_url = std::env::var("NLE_BASE_URL").ok();
@@ -51,12 +52,11 @@ pub async fn get_client(args: &ProjectArgs) -> AnyResult<NleCloudClient> {
             tracing::info!("Successfully authenticated with NLECloud.");
             Ok(client.with_token(login_res.access_token))
         }
-        _ => bail!("NLECloud credentials required. Please set NLE_ACCOUNT and NLE_PASSWORD in your .env file (see .env.example) or provide them via CLI options (--account, --password)."),
+        _ => bail!("NLECloud credentials required. Please set NLE_ACCOUNT and NLE_PASSWORD in your .env file or provide them via CLI options (--account, --password)."),
     }
 }
 
-/// Resolves a globally unique device name and tag using an optional namespace or project_id.
-/// NLECloud requires Tag to match `^[a-zA-Z0-9_]{6,30}$` and Name to be 6..=15 characters.
+/// Resolves a device name and tag using an optional namespace or project_id fallback.
 pub fn resolve_device_name_and_tag(
     namespace: Option<&str>,
     project_id: i32,
@@ -97,164 +97,127 @@ pub fn resolve_device_name_and_tag(
     (name, tag)
 }
 
-/// Provisions a device within a project and populates its sensors/actuators.
-/// This function is generalized so it can be called for multiple devices in the future.
-pub async fn provision_device(
-    client: &NleCloudClient,
-    project_id: i32,
-    device_name: &str,
-    device_tag: &str,
-) -> AnyResult<i32> {
-    tracing::info!("Checking for existing device (Name: '{device_name}', Tag: '{device_tag}') in project {project_id}...");
-    let query = DeviceQueryParams::builder()
-        .tag(device_tag)
-        .project_key_word(project_id.to_string())
-        .page_size(100)
-        .build();
-
-    let paged = client.get_devices(&query, None).await?;
-    let existing = paged
-        .page_set
-        .into_iter()
-        .find(|d| d.tag.as_deref() == Some(device_tag) || d.name.as_deref() == Some(device_name));
-
-    let device_id = match existing {
-        Some(d) => {
-            println!(
-                "Device '{}' already exists (ID: {}, Tag: {}).",
-                device_name,
-                d.device_id,
-                d.tag.as_deref().unwrap_or("N/A")
-            );
-            d.device_id
-        }
-        None => {
-            println!("Device '{device_name}' (Tag: '{device_tag}') not found. Provisioning new device...");
-            let dto = DeviceAddUpdateDto::builder()
-                .project_id_or_tag(project_id.to_string())
-                .name(device_name)
-                .tag(device_tag)
-                .protocol(DeviceProtocol::Tcp)
-                .build();
-            let id = client.add_device(&dto, None).await?;
-            println!("Successfully provisioned device '{device_name}' (ID: {id}, Tag: '{device_tag}')");
-            id
-        }
-    };
-
-    // Populate all sensors and actuators for this device
-    populate_device_peripherals(client, device_id, device_name).await?;
-
-    Ok(device_id)
-}
-
-/// Populates all sensors and actuators for a device in an idempotent manner.
-pub async fn populate_device_peripherals(
+/// Reconciles all sensors and actuators for a device against declarative seed definitions.
+/// Deletes any peripherals in the cloud that are not defined in the JSON, and creates missing ones.
+pub async fn reconcile_device_peripherals(
     client: &NleCloudClient,
     device_id: i32,
-    device_name: &str,
+    seed_dev: &DeviceSeed,
 ) -> AnyResult<()> {
-    // 1. Light LDR Sensor (brightness, float, flux)
-    let brightness_exists = client
-        .get_sensor_info(device_id, TAG_BRIGHTNESS, None)
-        .await
-        .is_ok();
+    let full_info = client.get_device_info(device_id, None).await?;
+    let cloud_sensors = full_info.sensors.unwrap_or_default();
 
-    if brightness_exists {
-        println!("Sensor '{TAG_BRIGHTNESS}' already exists on device '{device_name}'.");
-    } else {
-        println!("Adding sensor '{TAG_BRIGHTNESS}' (LDR, Float, {SENSOR_UNIT_FLUX}) to device '{device_name}'...");
-        let brightness_sensor = SensorAddUpdate::builder()
-            .name(SENSOR_NAME_BRIGHTNESS)
-            .api_tag(TAG_BRIGHTNESS)
-            .trans_type(TransType::ReportOnly)
-            .data_type(DataType::Float)
-            .type_attrs(SENSOR_TYPE_LDR)
-            .unit(SENSOR_UNIT_FLUX)
-            .precision(2)
-            .build();
-        client.add_sensor(device_id, &brightness_sensor, None).await?;
-        println!("Successfully added sensor '{TAG_BRIGHTNESS}' to device '{device_name}'.");
+    let expected_tags: HashSet<&str> = seed_dev
+        .sensors
+        .iter()
+        .map(|s| s.api_tag.as_str())
+        .chain(seed_dev.actuators.iter().map(|a| a.api_tag.as_str()))
+        .collect();
+
+    // 1. Delete obsolete peripherals not present in seed JSON
+    for cs in &cloud_sensors {
+        let api_tag = cs.api_tag.as_str();
+        if !expected_tags.contains(api_tag) {
+            tracing::warn!(
+                tag = %api_tag,
+                device = %seed_dev.name,
+                "Deleting obsolete peripheral from device"
+            );
+            client.delete_sensor(device_id, api_tag, None).await?;
+            tracing::info!(tag = %api_tag, "Successfully deleted obsolete peripheral");
+        }
     }
 
-    // 2. Servo X Actuator (Scale 0..180 deg)
-    let servo_x_exists = client
-        .get_sensor_info(device_id, TAG_SERVO_X, None)
-        .await
-        .is_ok();
+    // 2. Reconcile sensors defined in JSON
+    for s in &seed_dev.sensors {
+        let exists = cloud_sensors.iter().any(|cs| cs.api_tag == s.api_tag);
 
-    if servo_x_exists {
-        println!("Actuator '{TAG_SERVO_X}' already exists on device '{device_name}'.");
-    } else {
-        println!("Adding actuator '{TAG_SERVO_X}' (Scale, 0-{SERVO_MAX_ANGLE}{SERVO_UNIT_DEGREE}) to device '{device_name}'...");
-        let servo_x = ActuatorAddUpdate::builder()
-            .name(ACTUATOR_NAME_SERVO_X)
-            .api_tag(TAG_SERVO_X)
-            .trans_type(TransType::ReportAndControl)
-            .data_type(DataType::Float)
-            .oper_type(ActuatorOperType::Scale)
-            .serial_number(1)
-            .build();
-        client.add_sensor(device_id, &servo_x, None).await?;
-        println!("Successfully added actuator '{TAG_SERVO_X}' to device '{device_name}'.");
-    }
-
-    // 3. Servo Y Actuator (Scale 0..180 deg)
-    let servo_y_exists = client
-        .get_sensor_info(device_id, TAG_SERVO_Y, None)
-        .await
-        .is_ok();
-
-    if servo_y_exists {
-        println!("Actuator '{TAG_SERVO_Y}' already exists on device '{device_name}'.");
-    } else {
-        println!("Adding actuator '{TAG_SERVO_Y}' (Scale, 0-{SERVO_MAX_ANGLE}{SERVO_UNIT_DEGREE}) to device '{device_name}'...");
-        let servo_y = ActuatorAddUpdate::builder()
-            .name(ACTUATOR_NAME_SERVO_Y)
-            .api_tag(TAG_SERVO_Y)
-            .trans_type(TransType::ReportAndControl)
-            .data_type(DataType::Float)
-            .oper_type(ActuatorOperType::Scale)
-            .serial_number(2)
-            .build();
-        client.add_sensor(device_id, &servo_y, None).await?;
-        println!("Successfully added actuator '{TAG_SERVO_Y}' to device '{device_name}'.");
-    }
-
-    // 4. Boolean Switch Actuators (lamp, fan, lock)
-    let boolean_actuators = [
-        (TAG_LAMP, ACTUATOR_NAME_LAMP, 3),
-        (TAG_FAN, ACTUATOR_NAME_FAN, 4),
-        (TAG_LOCK, ACTUATOR_NAME_LOCK, 5),
-    ];
-
-    for (tag, name, serial) in boolean_actuators {
-        let exists = client.get_sensor_info(device_id, tag, None).await.is_ok();
         if exists {
-            println!("Actuator '{tag}' already exists on device '{device_name}'.");
+            tracing::info!(
+                tag = %s.api_tag,
+                device = %seed_dev.name,
+                "Sensor already exists on device"
+            );
         } else {
-            println!("Adding boolean actuator '{tag}' (Switch) to device '{device_name}'...");
-            let actuator = ActuatorAddUpdate::builder()
-                .name(name)
-                .api_tag(tag)
-                .trans_type(TransType::ReportAndControl)
-                .data_type(DataType::Boolean)
-                .oper_type(ActuatorOperType::Switch)
-                .serial_number(serial)
+            tracing::info!(
+                tag = %s.api_tag,
+                name = %s.name,
+                device = %seed_dev.name,
+                "Adding sensor to device..."
+            );
+            let sensor_dto = SensorAddUpdate::builder()
+                .name(&s.name)
+                .api_tag(&s.api_tag)
+                .trans_type(s.trans_type_kind())
+                .data_type(s.data_type_kind())
+                .maybe_type_attrs(s.type_attrs.clone())
+                .maybe_unit(s.unit.clone())
+                .precision(s.precision.unwrap_or(2))
                 .build();
-            client.add_sensor(device_id, &actuator, None).await?;
-            println!("Successfully added actuator '{tag}' to device '{device_name}'.");
+
+            client.add_sensor(device_id, &sensor_dto, None).await?;
+            tracing::info!(
+                tag = %s.api_tag,
+                device = %seed_dev.name,
+                "Successfully added sensor to device"
+            );
+        }
+    }
+
+    // 3. Reconcile actuators defined in JSON
+    for a in &seed_dev.actuators {
+        let exists = cloud_sensors.iter().any(|cs| cs.api_tag == a.api_tag);
+
+        if exists {
+            tracing::info!(
+                tag = %a.api_tag,
+                device = %seed_dev.name,
+                "Actuator already exists on device"
+            );
+        } else {
+            tracing::info!(
+                tag = %a.api_tag,
+                name = %a.name,
+                device = %seed_dev.name,
+                "Adding actuator to device..."
+            );
+            let actuator_dto = ActuatorAddUpdate::builder()
+                .name(&a.name)
+                .api_tag(&a.api_tag)
+                .trans_type(a.trans_type_kind())
+                .data_type(a.data_type_kind())
+                .oper_type(a.oper_type_kind())
+                .serial_number(a.serial_number.unwrap_or(0))
+                .build();
+
+            client.add_sensor(device_id, &actuator_dto, None).await?;
+            tracing::info!(
+                tag = %a.api_tag,
+                device = %seed_dev.name,
+                "Successfully added actuator to device"
+            );
         }
     }
 
     Ok(())
 }
 
+/// Declarative, idempotent provisioner that treats the seed JSON file as the source of truth.
 pub async fn provision(args: &ProjectArgs) -> AnyResult<()> {
     let project_name = args.resolved_name();
     let client = get_client(args).await?;
 
-    tracing::info!("Searching for existing project '{project_name}'...");
+    // 1. Load declarative device definitions from JSON
+    let devices_file = args.resolve_devices_file();
+    let seed_devices = crate::seed::load_devices_from_file(&devices_file)?;
+    tracing::info!(
+        count = seed_devices.len(),
+        path = %devices_file.display(),
+        "Loaded declarative device definitions"
+    );
+
+    // 2. Discover or create target project
+    tracing::info!("Searching for project '{project_name}' on NLECloud...");
     let query = ProjectQueryParams::builder()
         .keyword(project_name.clone())
         .page_size(100)
@@ -268,16 +231,16 @@ pub async fn provision(args: &ProjectArgs) -> AnyResult<()> {
 
     let project_id = match existing {
         Some(p) => {
-            println!(
-                "Project '{}' already exists (ID: {}, Tag: {}).",
-                project_name,
-                p.project_id,
-                p.project_tag.as_deref().unwrap_or("N/A")
+            tracing::info!(
+                project = %project_name,
+                id = p.project_id,
+                tag = ?p.project_tag,
+                "Project already exists"
             );
             p.project_id
         }
         None => {
-            println!("Project '{project_name}' not found. Provisioning new project...");
+            tracing::info!("Project '{project_name}' not found. Provisioning new project...");
             let industry = IndustryKind::try_from(args.industry).unwrap_or(IndustryKind::SmartHome);
             let net_work_kind = NetworkKind::try_from(args.network_kind).unwrap_or(NetworkKind::Wifi);
             let dto = ProjectAddUpdateDto::builder()
@@ -286,25 +249,89 @@ pub async fn provision(args: &ProjectArgs) -> AnyResult<()> {
                 .net_work_kind(net_work_kind)
                 .build();
             let id = client.add_project(&dto, None).await?;
-            println!("Successfully provisioned project '{project_name}' (ID: {id})");
+            tracing::info!(
+                project = %project_name,
+                id = id,
+                "Successfully provisioned project"
+            );
             id
         }
     };
 
-    // Resolve unique namespaced device name and tag to avoid platform-wide collisions
-    let (device_name, device_tag) = resolve_device_name_and_tag(
-        args.device_namespace.as_deref(),
-        project_id,
-        DEFAULT_DEVICE_BASE_NAME,
-    );
+    // 3. Query all devices currently attached to this project in the cloud
+    let dev_query = DeviceQueryParams::builder()
+        .project_key_word(project_id.to_string())
+        .page_size(100)
+        .build();
+    let cloud_devices = client.get_devices(&dev_query, None).await?.page_set;
 
-    // Provision the device and all its sensors/actuators
-    provision_device(&client, project_id, &device_name, &device_tag).await?;
+    // 4. Delete obsolete cloud devices not declared in the JSON seed
+    let seed_tags: HashSet<&str> = seed_devices.iter().map(|d| d.tag.as_str()).collect();
+    let seed_names: HashSet<&str> = seed_devices.iter().map(|d| d.name.as_str()).collect();
 
-    println!("Project '{project_name}' provisioning complete.");
+    for dev in &cloud_devices {
+        let dev_tag = dev.tag.as_deref().unwrap_or("");
+        let dev_name = dev.name.as_deref().unwrap_or("");
+        if !seed_tags.contains(dev_tag) && !seed_names.contains(dev_name) {
+            tracing::warn!(
+                name = %dev_name,
+                id = dev.device_id,
+                tag = %dev_tag,
+                "Deleting obsolete cloud device not present in JSON seed"
+            );
+            client.delete_device(dev.device_id, None).await?;
+            tracing::info!(id = dev.device_id, "Successfully deleted obsolete device");
+        }
+    }
+
+    // 5. Reconcile seed devices and their peripherals
+    for seed_dev in &seed_devices {
+        let matched = cloud_devices.iter().find(|d| {
+            d.tag.as_deref() == Some(&seed_dev.tag) || d.name.as_deref() == Some(&seed_dev.name)
+        });
+
+        let device_id = match matched {
+            Some(d) => {
+                tracing::info!(
+                    name = %seed_dev.name,
+                    tag = %seed_dev.tag,
+                    id = d.device_id,
+                    "Device already exists"
+                );
+                d.device_id
+            }
+            None => {
+                tracing::info!(
+                    name = %seed_dev.name,
+                    tag = %seed_dev.tag,
+                    "Device not found. Provisioning new device..."
+                );
+                let dto = DeviceAddUpdateDto::builder()
+                    .project_id_or_tag(project_id.to_string())
+                    .name(&seed_dev.name)
+                    .tag(&seed_dev.tag)
+                    .protocol(seed_dev.protocol_kind())
+                    .build();
+                let id = client.add_device(&dto, None).await?;
+                tracing::info!(
+                    name = %seed_dev.name,
+                    tag = %seed_dev.tag,
+                    id = id,
+                    "Successfully provisioned device"
+                );
+                id
+            }
+        };
+
+        // Reconcile sensors and actuators for this device
+        reconcile_device_peripherals(&client, device_id, seed_dev).await?;
+    }
+
+    tracing::info!("Declarative provisioning complete for project '{project_name}'.");
     Ok(())
 }
 
+/// Deletes the project by name.
 pub async fn delete(args: &ProjectArgs) -> AnyResult<()> {
     let project_name = args.resolved_name();
     let client = get_client(args).await?;
@@ -323,16 +350,17 @@ pub async fn delete(args: &ProjectArgs) -> AnyResult<()> {
         .collect();
 
     if matching.is_empty() {
-        println!("Project '{project_name}' was not found. Nothing to delete.");
+        tracing::info!("Project '{project_name}' was not found. Nothing to delete.");
         return Ok(());
     }
 
     let ids: Vec<i32> = matching.iter().map(|p| p.project_id).collect();
     client.delete_projects(&ids, None).await?;
 
-    println!(
-        "Successfully deleted project '{}' (ID(s): {:?})",
-        project_name, ids
+    tracing::info!(
+        project = %project_name,
+        ids = ?ids,
+        "Successfully deleted project"
     );
     Ok(())
 }
