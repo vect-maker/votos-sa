@@ -867,7 +867,7 @@ int main(void) {
 
   Servo_Home();
   HAL_Delay(300);
-  CalibrateServosToLight();
+  // CalibrateServosToLight(); /* Servo mapping of environment disabled for now */
 
   int8_t result = -99;
   for (int attempt = 0; attempt < 3; attempt++) {
