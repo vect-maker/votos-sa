@@ -27,3 +27,10 @@ export const ACTUATOR_SERVO_TAGS = [
 
 export const SERVO_MIN_ANGLE = 0
 export const SERVO_MAX_ANGLE = 180
+
+export const SERVO_X_MIN_ANGLE = 0
+export const SERVO_X_MAX_ANGLE = 180
+
+export const SERVO_Y_MIN_ANGLE = 0
+export const SERVO_Y_MAX_ANGLE = 90
+

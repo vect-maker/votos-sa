@@ -7,7 +7,7 @@ services:
     build: !reset null
     image: node:26-alpine
     working_dir: /app
-    command: sh -c "test -d node_modules/vite || npm install; npm run dev"
+    command: sh -c "npm install; npm run dev"
     volumes:
       - ./frontend:/app:z
       # Anonymous volume prevents host and container node_modules collision

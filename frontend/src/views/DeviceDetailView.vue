@@ -2,6 +2,7 @@
 import { ref, computed, onMounted } from 'vue'
 import { RouterLink } from 'vue-router'
 import { useDevicesStore } from '@/stores/devices'
+import LuxHistoryChart from '@/components/devices/LuxHistoryChart.vue'
 import {
   TAG_BRIGHTNESS,
   TAG_LAMP,
@@ -9,8 +10,12 @@ import {
   TAG_LOCK,
   TAG_SERVO_X,
   TAG_SERVO_Y,
-  SERVO_MIN_ANGLE,
-  SERVO_MAX_ANGLE,
+  SERVO_X_MIN_ANGLE,
+  SERVO_X_MAX_ANGLE,
+  SERVO_Y_MIN_ANGLE,
+  SERVO_Y_MAX_ANGLE,
+  ACTUATOR_SWITCH_TAGS,
+  ACTUATOR_SERVO_TAGS,
 } from '@/api/modules/devices/domain'
 import {
   SwitchRoot,
@@ -49,6 +54,7 @@ const props = defineProps<Props>()
 const store = useDevicesStore()
 
 const commandLoading = ref<Record<string, boolean>>({})
+const optimisticSwitches = ref<Record<string, boolean>>({})
 const localServoX = ref<number | null>(null)
 const localServoY = ref<number | null>(null)
 
@@ -74,46 +80,64 @@ function getSensorValue(tag: string): string | number | boolean | null {
 }
 
 function isSwitchActive(tag: string): boolean {
+  if (optimisticSwitches.value[tag] !== undefined) {
+    return optimisticSwitches.value[tag]
+  }
   const val = getSensorValue(tag)
   return val === true || val === 1 || val === '1' || val === 'true'
 }
 
 function getServoValue(tag: string): number {
   const val = getSensorValue(tag)
+  const min = tag === TAG_SERVO_Y ? SERVO_Y_MIN_ANGLE : SERVO_X_MIN_ANGLE
+  const max = tag === TAG_SERVO_Y ? SERVO_Y_MAX_ANGLE : SERVO_X_MAX_ANGLE
+  const defaultVal = tag === TAG_SERVO_Y ? 45 : 90
+
   if (typeof val === 'number') {
-    return Math.max(SERVO_MIN_ANGLE, Math.min(SERVO_MAX_ANGLE, val))
+    return Math.max(min, Math.min(max, val))
   }
   if (typeof val === 'string') {
     const parsed = parseInt(val, 10)
     if (!isNaN(parsed)) {
-      return Math.max(SERVO_MIN_ANGLE, Math.min(SERVO_MAX_ANGLE, parsed))
+      return Math.max(min, Math.min(max, parsed))
     }
   }
-  return 90
+  return defaultVal
 }
 
 async function toggleSwitch(tag: string) {
   if (!isOnline.value || !device.value) return
   const current = isSwitchActive(tag)
-  const nextVal = !current ? 1 : 0
+  const nextVal = !current
 
+  // Optimistically set switch state immediately so UI responds instantaneously
+  optimisticSwitches.value[tag] = nextVal
   commandLoading.value[tag] = true
+
   try {
     await store.sendControl({
       device_id: device.value.device_id,
       tag,
-      value: nextVal,
+      value: nextVal ? 1 : 0,
     })
   } catch (err) {
     console.error(`Failed to toggle ${tag}:`, err)
+    // Revert optimistic switch on failure
+    optimisticSwitches.value[tag] = current
   } finally {
     commandLoading.value[tag] = false
+    // Clear optimistic override once store has reconciled
+    setTimeout(() => {
+      delete optimisticSwitches.value[tag]
+    }, 600)
   }
 }
 
 async function commitServo(tag: string, angle: number) {
   if (!isOnline.value || !device.value) return
-  const clamped = Math.max(SERVO_MIN_ANGLE, Math.min(SERVO_MAX_ANGLE, angle))
+  const min = tag === TAG_SERVO_Y ? SERVO_Y_MIN_ANGLE : SERVO_X_MIN_ANGLE
+  const max = tag === TAG_SERVO_Y ? SERVO_Y_MAX_ANGLE : SERVO_X_MAX_ANGLE
+  const clamped = Math.max(min, Math.min(max, angle))
 
   commandLoading.value[tag] = true
   try {
@@ -126,10 +150,28 @@ async function commitServo(tag: string, angle: number) {
     console.error(`Failed to rotate ${tag}:`, err)
   } finally {
     commandLoading.value[tag] = false
-    if (tag === TAG_SERVO_X) localServoX.value = null
-    if (tag === TAG_SERVO_Y) localServoY.value = null
+    setTimeout(() => {
+      if (tag === TAG_SERVO_X) localServoX.value = null
+      if (tag === TAG_SERVO_Y) localServoY.value = null
+    }, 200)
   }
 }
+
+const environmentalSensors = computed(() => {
+  if (!device.value?.sensors) return {}
+  const res: Record<string, string | number | boolean | null> = {}
+  const excludedTags: readonly string[] = [
+    TAG_BRIGHTNESS,
+    ...ACTUATOR_SWITCH_TAGS,
+    ...ACTUATOR_SERVO_TAGS,
+  ]
+  for (const [tag, val] of Object.entries(device.value.sensors)) {
+    if (!excludedTags.includes(tag)) {
+      res[tag] = val
+    }
+  }
+  return res
+})
 
 function onServoXUpdate(values?: number[]) {
   if (values && typeof values[0] === 'number') {
@@ -285,7 +327,7 @@ const brightnessValue = computed<number | null>(() => {
           </div>
 
           <div v-if="isOnline && device.sensors" class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
-            <!-- Brightness Gauge -->
+            <!-- Ambient Light Sensor Gauge -->
             <div class="bg-base-200/60 border border-base-300/60 rounded-box p-4 flex items-center justify-between">
               <div>
                 <div class="flex items-center gap-1.5 text-xs text-base-content/60 font-medium">
@@ -308,10 +350,9 @@ const brightnessValue = computed<number | null>(() => {
               </div>
             </div>
 
-            <!-- Other Telemetry Keys -->
-            <template v-for="(val, tag) in device.sensors" :key="tag">
+            <!-- Additional Environmental Sensors (if present) -->
+            <template v-for="(val, tag) in environmentalSensors" :key="tag">
               <div
-                v-if="tag !== TAG_BRIGHTNESS"
                 class="bg-base-200/60 border border-base-300/60 rounded-box p-4 flex flex-col justify-between"
               >
                 <div class="flex items-center justify-between text-xs text-base-content/60 font-medium">
@@ -337,6 +378,9 @@ const brightnessValue = computed<number | null>(() => {
             </p>
           </div>
         </div>
+
+        <!-- Real-time Ambient Light (Lux) History Graph -->
+        <LuxHistoryChart v-if="device" :device-id="device.device_id" />
 
         <!-- Controls & Actuators -->
         <div class="card bg-base-100 border border-base-300 shadow-sm p-5">
@@ -369,28 +413,36 @@ const brightnessValue = computed<number | null>(() => {
                   </div>
                 </div>
 
-                <TooltipRoot :delay-duration="200">
-                  <TooltipTrigger as-child>
-                    <div>
-                      <SwitchRoot
-                        :model-value="isSwitchActive(TAG_LAMP)"
-                        :disabled="!isOnline || commandLoading[TAG_LAMP]"
-                        class="w-12 h-6 bg-base-300 rounded-full relative transition-colors cursor-pointer data-[state=checked]:bg-primary disabled:cursor-not-allowed disabled:opacity-50 inline-flex items-center px-0.5"
-                        @update:model-value="toggleSwitch(TAG_LAMP)"
-                      >
-                        <SwitchThumb
-                          class="block w-5 h-5 bg-white rounded-full shadow-md transition-transform duration-150 translate-x-0 data-[state=checked]:translate-x-6"
-                        />
-                      </SwitchRoot>
-                    </div>
-                  </TooltipTrigger>
-                  <TooltipPortal v-if="!isOnline">
-                    <TooltipContent class="bg-neutral text-neutral-content text-xs px-2 py-1 rounded shadow-md z-50">
-                      Device is offline. Controls disabled.
-                      <TooltipArrow class="fill-neutral" />
-                    </TooltipContent>
-                  </TooltipPortal>
-                </TooltipRoot>
+                <div class="flex items-center gap-2.5">
+                  <span
+                    v-if="commandLoading[TAG_LAMP]"
+                    class="loading loading-spinner loading-xs text-primary"
+                    title="Updating lamp..."
+                  ></span>
+                  <TooltipRoot :delay-duration="200">
+                    <TooltipTrigger as-child>
+                      <div>
+                        <SwitchRoot
+                          :model-value="isSwitchActive(TAG_LAMP)"
+                          :disabled="!isOnline || commandLoading[TAG_LAMP]"
+                          aria-label="Toggle Lamp / Main Light"
+                          class="w-12 h-6 bg-base-300 rounded-full relative transition-colors cursor-pointer data-[state=checked]:bg-primary disabled:cursor-not-allowed disabled:opacity-50 inline-flex items-center px-0.5"
+                          @update:model-value="toggleSwitch(TAG_LAMP)"
+                        >
+                          <SwitchThumb
+                            class="block w-5 h-5 bg-white rounded-full shadow-md transition-transform duration-150 translate-x-0 data-[state=checked]:translate-x-6"
+                          />
+                        </SwitchRoot>
+                      </div>
+                    </TooltipTrigger>
+                    <TooltipPortal v-if="!isOnline">
+                      <TooltipContent class="bg-neutral text-neutral-content text-xs px-2 py-1 rounded shadow-md z-50">
+                        Device is offline. Controls disabled.
+                        <TooltipArrow class="fill-neutral" />
+                      </TooltipContent>
+                    </TooltipPortal>
+                  </TooltipRoot>
+                </div>
               </div>
 
               <!-- Ventilation Fan Switch -->
@@ -408,28 +460,36 @@ const brightnessValue = computed<number | null>(() => {
                   </div>
                 </div>
 
-                <TooltipRoot :delay-duration="200">
-                  <TooltipTrigger as-child>
-                    <div>
-                      <SwitchRoot
-                        :model-value="isSwitchActive(TAG_FAN)"
-                        :disabled="!isOnline || commandLoading[TAG_FAN]"
-                        class="w-12 h-6 bg-base-300 rounded-full relative transition-colors cursor-pointer data-[state=checked]:bg-primary disabled:cursor-not-allowed disabled:opacity-50 inline-flex items-center px-0.5"
-                        @update:model-value="toggleSwitch(TAG_FAN)"
-                      >
-                        <SwitchThumb
-                          class="block w-5 h-5 bg-white rounded-full shadow-md transition-transform duration-150 translate-x-0 data-[state=checked]:translate-x-6"
-                        />
-                      </SwitchRoot>
-                    </div>
-                  </TooltipTrigger>
-                  <TooltipPortal v-if="!isOnline">
-                    <TooltipContent class="bg-neutral text-neutral-content text-xs px-2 py-1 rounded shadow-md z-50">
-                      Device is offline. Controls disabled.
-                      <TooltipArrow class="fill-neutral" />
-                    </TooltipContent>
-                  </TooltipPortal>
-                </TooltipRoot>
+                <div class="flex items-center gap-2.5">
+                  <span
+                    v-if="commandLoading[TAG_FAN]"
+                    class="loading loading-spinner loading-xs text-primary"
+                    title="Updating fan..."
+                  ></span>
+                  <TooltipRoot :delay-duration="200">
+                    <TooltipTrigger as-child>
+                      <div>
+                        <SwitchRoot
+                          :model-value="isSwitchActive(TAG_FAN)"
+                          :disabled="!isOnline || commandLoading[TAG_FAN]"
+                          aria-label="Toggle Ventilation Fan"
+                          class="w-12 h-6 bg-base-300 rounded-full relative transition-colors cursor-pointer data-[state=checked]:bg-primary disabled:cursor-not-allowed disabled:opacity-50 inline-flex items-center px-0.5"
+                          @update:model-value="toggleSwitch(TAG_FAN)"
+                        >
+                          <SwitchThumb
+                            class="block w-5 h-5 bg-white rounded-full shadow-md transition-transform duration-150 translate-x-0 data-[state=checked]:translate-x-6"
+                          />
+                        </SwitchRoot>
+                      </div>
+                    </TooltipTrigger>
+                    <TooltipPortal v-if="!isOnline">
+                      <TooltipContent class="bg-neutral text-neutral-content text-xs px-2 py-1 rounded shadow-md z-50">
+                        Device is offline. Controls disabled.
+                        <TooltipArrow class="fill-neutral" />
+                      </TooltipContent>
+                    </TooltipPortal>
+                  </TooltipRoot>
+                </div>
               </div>
 
               <!-- Lock Switch -->
@@ -447,28 +507,36 @@ const brightnessValue = computed<number | null>(() => {
                   </div>
                 </div>
 
-                <TooltipRoot :delay-duration="200">
-                  <TooltipTrigger as-child>
-                    <div>
-                      <SwitchRoot
-                        :model-value="isSwitchActive(TAG_LOCK)"
-                        :disabled="!isOnline || commandLoading[TAG_LOCK]"
-                        class="w-12 h-6 bg-base-300 rounded-full relative transition-colors cursor-pointer data-[state=checked]:bg-primary disabled:cursor-not-allowed disabled:opacity-50 inline-flex items-center px-0.5"
-                        @update:model-value="toggleSwitch(TAG_LOCK)"
-                      >
-                        <SwitchThumb
-                          class="block w-5 h-5 bg-white rounded-full shadow-md transition-transform duration-150 translate-x-0 data-[state=checked]:translate-x-6"
-                        />
-                      </SwitchRoot>
-                    </div>
-                  </TooltipTrigger>
-                  <TooltipPortal v-if="!isOnline">
-                    <TooltipContent class="bg-neutral text-neutral-content text-xs px-2 py-1 rounded shadow-md z-50">
-                      Device is offline. Controls disabled.
-                      <TooltipArrow class="fill-neutral" />
-                    </TooltipContent>
-                  </TooltipPortal>
-                </TooltipRoot>
+                <div class="flex items-center gap-2.5">
+                  <span
+                    v-if="commandLoading[TAG_LOCK]"
+                    class="loading loading-spinner loading-xs text-primary"
+                    title="Updating lock..."
+                  ></span>
+                  <TooltipRoot :delay-duration="200">
+                    <TooltipTrigger as-child>
+                      <div>
+                        <SwitchRoot
+                          :model-value="isSwitchActive(TAG_LOCK)"
+                          :disabled="!isOnline || commandLoading[TAG_LOCK]"
+                          aria-label="Toggle Smart Lock"
+                          class="w-12 h-6 bg-base-300 rounded-full relative transition-colors cursor-pointer data-[state=checked]:bg-primary disabled:cursor-not-allowed disabled:opacity-50 inline-flex items-center px-0.5"
+                          @update:model-value="toggleSwitch(TAG_LOCK)"
+                        >
+                          <SwitchThumb
+                            class="block w-5 h-5 bg-white rounded-full shadow-md transition-transform duration-150 translate-x-0 data-[state=checked]:translate-x-6"
+                          />
+                        </SwitchRoot>
+                      </div>
+                    </TooltipTrigger>
+                    <TooltipPortal v-if="!isOnline">
+                      <TooltipContent class="bg-neutral text-neutral-content text-xs px-2 py-1 rounded shadow-md z-50">
+                        Device is offline. Controls disabled.
+                        <TooltipArrow class="fill-neutral" />
+                      </TooltipContent>
+                    </TooltipPortal>
+                  </TooltipRoot>
+                </div>
               </div>
             </div>
 
@@ -485,18 +553,26 @@ const brightnessValue = computed<number | null>(() => {
                     <div class="text-sm font-semibold">Servo Horizon (X)</div>
                     <div class="text-[10px] text-base-content/50 font-mono">tag: {{ TAG_SERVO_X }}</div>
                   </div>
-                  <span class="badge badge-sm badge-neutral font-mono">
-                    {{ localServoX ?? getServoValue(TAG_SERVO_X) }}°
-                  </span>
+                  <div class="flex items-center gap-2">
+                    <span
+                      v-if="commandLoading[TAG_SERVO_X]"
+                      class="loading loading-spinner loading-xs text-primary"
+                      title="Rotating servo X..."
+                    ></span>
+                    <span class="badge badge-sm badge-neutral font-mono">
+                      {{ localServoX ?? getServoValue(TAG_SERVO_X) }}°
+                    </span>
+                  </div>
                 </div>
 
                 <!-- Slider -->
                 <SliderRoot
                   :model-value="[localServoX ?? getServoValue(TAG_SERVO_X)]"
-                  :min="SERVO_MIN_ANGLE"
-                  :max="SERVO_MAX_ANGLE"
+                  :min="SERVO_X_MIN_ANGLE"
+                  :max="SERVO_X_MAX_ANGLE"
                   :step="1"
                   :disabled="!isOnline || commandLoading[TAG_SERVO_X]"
+                  aria-label="Servo Horizon (X) angle"
                   class="relative flex items-center select-none touch-none w-full h-5 cursor-pointer disabled:cursor-not-allowed disabled:opacity-50"
                   @update:model-value="onServoXUpdate"
                   @value-commit="onServoXCommit"
@@ -505,7 +581,7 @@ const brightnessValue = computed<number | null>(() => {
                     <SliderRange class="absolute bg-primary rounded-full h-full" />
                   </SliderTrack>
                   <SliderThumb
-                    class="block w-5 h-5 bg-primary rounded-full shadow focus:outline-none focus:ring-2 focus:ring-primary/50"
+                    class="block w-5 h-5 bg-primary rounded-full shadow focus:outline-none focus:ring-2 focus:ring-primary/50 cursor-grab active:cursor-grabbing relative before:absolute before:-inset-2.5 before:content-['']"
                   />
                 </SliderRoot>
 
@@ -523,18 +599,26 @@ const brightnessValue = computed<number | null>(() => {
                     <div class="text-sm font-semibold">Servo Vertical (Y)</div>
                     <div class="text-[10px] text-base-content/50 font-mono">tag: {{ TAG_SERVO_Y }}</div>
                   </div>
-                  <span class="badge badge-sm badge-neutral font-mono">
-                    {{ localServoY ?? getServoValue(TAG_SERVO_Y) }}°
-                  </span>
+                  <div class="flex items-center gap-2">
+                    <span
+                      v-if="commandLoading[TAG_SERVO_Y]"
+                      class="loading loading-spinner loading-xs text-primary"
+                      title="Rotating servo Y..."
+                    ></span>
+                    <span class="badge badge-sm badge-neutral font-mono">
+                      {{ localServoY ?? getServoValue(TAG_SERVO_Y) }}°
+                    </span>
+                  </div>
                 </div>
 
                 <!-- Slider -->
                 <SliderRoot
                   :model-value="[localServoY ?? getServoValue(TAG_SERVO_Y)]"
-                  :min="SERVO_MIN_ANGLE"
-                  :max="SERVO_MAX_ANGLE"
+                  :min="SERVO_Y_MIN_ANGLE"
+                  :max="SERVO_Y_MAX_ANGLE"
                   :step="1"
                   :disabled="!isOnline || commandLoading[TAG_SERVO_Y]"
+                  aria-label="Servo Vertical (Y) angle"
                   class="relative flex items-center select-none touch-none w-full h-5 cursor-pointer disabled:cursor-not-allowed disabled:opacity-50"
                   @update:model-value="onServoYUpdate"
                   @value-commit="onServoYCommit"
@@ -543,14 +627,14 @@ const brightnessValue = computed<number | null>(() => {
                     <SliderRange class="absolute bg-primary rounded-full h-full" />
                   </SliderTrack>
                   <SliderThumb
-                    class="block w-5 h-5 bg-primary rounded-full shadow focus:outline-none focus:ring-2 focus:ring-primary/50"
+                    class="block w-5 h-5 bg-primary rounded-full shadow focus:outline-none focus:ring-2 focus:ring-primary/50 cursor-grab active:cursor-grabbing relative before:absolute before:-inset-2.5 before:content-['']"
                   />
                 </SliderRoot>
 
                 <div class="flex justify-between text-[10px] text-base-content/50 px-1 font-mono">
                   <span>0°</span>
+                  <span>45°</span>
                   <span>90°</span>
-                  <span>180°</span>
                 </div>
               </div>
             </div>

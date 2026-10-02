@@ -26,6 +26,75 @@ impl DeviceSnapshot {
     }
 }
 
+/// Checks loose equivalence between two JSON values in an IoT actuator/sensor context
+/// (e.g., bool `true` == number `1`, `"1"` == `1`, `90.0` == `90`).
+pub fn values_are_equivalent(a: &serde_json::Value, b: &serde_json::Value) -> bool {
+    if a == b {
+        return true;
+    }
+    match (a, b) {
+        // Bool vs Number: true == 1, false == 0
+        (serde_json::Value::Bool(b_val), serde_json::Value::Number(num))
+        | (serde_json::Value::Number(num), serde_json::Value::Bool(b_val)) => {
+            if let Some(i) = num.as_i64() {
+                (*b_val && i != 0) || (!*b_val && i == 0)
+            } else if let Some(f) = num.as_f64() {
+                (*b_val && f.abs() > f64::EPSILON) || (!*b_val && f.abs() <= f64::EPSILON)
+            } else {
+                false
+            }
+        }
+        // Number vs Number (floating point tolerance / integer representation)
+        (serde_json::Value::Number(n1), serde_json::Value::Number(n2)) => {
+            if let (Some(i1), Some(i2)) = (n1.as_i64(), n2.as_i64()) {
+                i1 == i2
+            } else if let (Some(f1), Some(f2)) = (n1.as_f64(), n2.as_f64()) {
+                (f1 - f2).abs() < 1e-3
+            } else {
+                false
+            }
+        }
+        // String vs Bool / Number
+        (serde_json::Value::String(s), other) | (other, serde_json::Value::String(s)) => {
+            let s_trimmed = s.trim().to_lowercase();
+            match other {
+                serde_json::Value::Bool(b_val) => {
+                    if *b_val {
+                        s_trimmed == "true" || s_trimmed == "1" || s_trimmed == "on"
+                    } else {
+                        s_trimmed == "false" || s_trimmed == "0" || s_trimmed == "off"
+                    }
+                }
+                serde_json::Value::Number(num) => {
+                    if let Ok(parsed_f) = s_trimmed.parse::<f64>() {
+                        if let Some(num_f) = num.as_f64() {
+                            (parsed_f - num_f).abs() < 1e-3
+                        } else {
+                            false
+                        }
+                    } else if s_trimmed == "true" || s_trimmed == "on" {
+                        num.as_f64().map(|f| f.abs() > f64::EPSILON).unwrap_or(false)
+                    } else if s_trimmed == "false" || s_trimmed == "off" {
+                        num.as_f64().map(|f| f.abs() <= f64::EPSILON).unwrap_or(false)
+                    } else {
+                        false
+                    }
+                }
+                _ => false,
+            }
+        }
+        _ => false,
+    }
+}
+
+/// Represents an in-flight actuator command awaiting cloud/hardware state reconciliation.
+#[derive(Debug, Clone)]
+pub struct PendingCommand {
+    pub value: serde_json::Value,
+    pub sent_at: std::time::Instant,
+    pub ttl: std::time::Duration,
+}
+
 /// Device abstraction that maintains cached identity and state,
 /// capable of polling its own data from NLECloud.
 #[derive(Debug)]
@@ -35,6 +104,7 @@ pub struct DeviceNode {
     pub name: String,
     pub tag: String,
     pub state: RwLock<DeviceSnapshot>,
+    pub pending_commands: RwLock<HashMap<String, PendingCommand>>,
 }
 
 impl DeviceNode {
@@ -50,7 +120,48 @@ impl DeviceNode {
                 tag,
                 sensors: None,
             }),
+            pending_commands: RwLock::new(HashMap::new()),
         }
+    }
+
+    /// Reconciles freshly polled cloud sensor data with active pending commands.
+    /// If cloud telemetry matches a pending command's target value, the pending command is cleared.
+    /// If cloud telemetry still has the old value, but the command is within its TTL grace period,
+    /// the pending target value overrides the stale cloud value so the local state does not revert.
+    /// If the TTL has expired without cloud confirmation, the pending command is discarded.
+    pub async fn reconcile_sensors(
+        &self,
+        mut cloud_sensors: HashMap<String, serde_json::Value>,
+    ) -> HashMap<String, serde_json::Value> {
+        let mut pending_guard = self.pending_commands.write().await;
+        pending_guard.retain(|tag, pending| {
+            if let Some(cloud_val) = cloud_sensors.get(tag) {
+                if values_are_equivalent(cloud_val, &pending.value) {
+                    tracing::debug!(
+                        device_id = self.device_id,
+                        tag = %tag,
+                        cloud_val = ?cloud_val,
+                        "Hardware/cloud confirmed pending command"
+                    );
+                    return false; // Confirmed by cloud telemetry!
+                }
+            }
+
+            if pending.sent_at.elapsed() < pending.ttl {
+                // Cloud is still reporting stale pre-command state; preserve target value
+                cloud_sensors.insert(tag.clone(), pending.value.clone());
+                true // Retain pending command
+            } else {
+                tracing::warn!(
+                    device_id = self.device_id,
+                    tag = %tag,
+                    "Pending command expired without cloud confirmation; accepting cloud state"
+                );
+                false // Evict expired command
+            }
+        });
+
+        cloud_sensors
     }
 
     /// Polls latest telemetry and status for this specific device.
@@ -81,7 +192,7 @@ impl DeviceNode {
                             }
                         }
                     }
-                    Some(map)
+                    Some(self.reconcile_sensors(map).await)
                 }
                 Err(e) => {
                     tracing::warn!("Could not fetch sensors for device {}: {e}", self.device_id);
@@ -89,6 +200,7 @@ impl DeviceNode {
                 }
             }
         } else {
+            self.pending_commands.write().await.clear();
             None
         };
 
@@ -127,6 +239,7 @@ pub struct ProjectManager {
     pub name: String,
     pub tag: Option<String>,
     pub devices: Vec<Arc<DeviceNode>>,
+    pub command_ttl: std::time::Duration,
 }
 
 impl ProjectManager {
@@ -136,6 +249,7 @@ impl ProjectManager {
         client: &NleCloudClient,
         project_name: &str,
         _device_namespace: Option<&str>,
+        command_ttl: std::time::Duration,
     ) -> AnyResult<Self> {
         tracing::info!("Discovering project '{project_name}' on NLECloud...");
 
@@ -205,6 +319,7 @@ impl ProjectManager {
             name: project_name.to_string(),
             tag: project_tag,
             devices,
+            command_ttl,
         };
 
         // Populate initial telemetry and status for all devices
@@ -265,23 +380,26 @@ impl ProjectManager {
 
         let mut any_changed = false;
         for dev in &self.devices {
-            let mut write_guard = dev.state.write().await;
             let online = status_map.get(&dev.device_id).copied().unwrap_or(false);
 
             let new_sensors = if online {
-                if let Some(telemetry) = device_telemetry.get(&dev.device_id) {
-                    let mut map = HashMap::new();
+                let map = if let Some(telemetry) = device_telemetry.get(&dev.device_id) {
+                    let mut m = HashMap::new();
                     for (tag, val) in telemetry {
-                        map.insert(tag.clone(), val.clone());
+                        m.insert(tag.clone(), val.clone());
                     }
-                    Some(map)
+                    m
                 } else {
-                    None
-                }
+                    HashMap::new()
+                };
+
+                Some(dev.reconcile_sensors(map).await)
             } else {
+                dev.pending_commands.write().await.clear();
                 None
             };
 
+            let mut write_guard = dev.state.write().await;
             if write_guard.sensors != new_sensors {
                 write_guard.sensors = new_sensors;
                 any_changed = true;
@@ -326,11 +444,31 @@ impl ProjectManager {
             .send_cmd(dev.device_id, api_tag, &send_val, None)
             .await?;
 
-        // Update local state immediately if sensors is Some
+        // 1. Record pending command with settling TTL to prevent polling from reverting state
+        {
+            let mut pending_guard = dev.pending_commands.write().await;
+            pending_guard.insert(
+                api_tag.to_string(),
+                PendingCommand {
+                    value: send_val.clone(),
+                    sent_at: std::time::Instant::now(),
+                    ttl: self.command_ttl,
+                },
+            );
+        }
+
+        // 2. Update local state immediately so snapshot reflects it
         {
             let mut write_guard = dev.state.write().await;
-            if let Some(ref mut map) = write_guard.sensors {
-                map.insert(api_tag.to_string(), send_val.clone());
+            match write_guard.sensors {
+                Some(ref mut map) => {
+                    map.insert(api_tag.to_string(), send_val.clone());
+                }
+                None => {
+                    let mut map = HashMap::new();
+                    map.insert(api_tag.to_string(), send_val.clone());
+                    write_guard.sensors = Some(map);
+                }
             }
         }
 
@@ -371,3 +509,60 @@ impl ProjectManager {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_values_are_equivalent() {
+        assert!(values_are_equivalent(&serde_json::json!(1), &serde_json::json!(1)));
+        assert!(values_are_equivalent(&serde_json::json!(1), &serde_json::json!(1.0)));
+        assert!(values_are_equivalent(&serde_json::json!(1), &serde_json::json!(true)));
+        assert!(values_are_equivalent(&serde_json::json!(0), &serde_json::json!(false)));
+        assert!(values_are_equivalent(&serde_json::json!("1"), &serde_json::json!(1)));
+        assert!(values_are_equivalent(&serde_json::json!("true"), &serde_json::json!(1)));
+        assert!(values_are_equivalent(&serde_json::json!(90), &serde_json::json!(90.0)));
+        assert!(!values_are_equivalent(&serde_json::json!(0), &serde_json::json!(1)));
+        assert!(!values_are_equivalent(&serde_json::json!(90), &serde_json::json!(45)));
+    }
+
+    #[tokio::test]
+    async fn test_pending_command_reconciliation() {
+        let dev = DeviceNode::new(1, 10, "Dev".into(), "tag".into());
+
+        // Register pending command for "lamp" -> 1
+        {
+            let mut pending = dev.pending_commands.write().await;
+            pending.insert(
+                "lamp".into(),
+                PendingCommand {
+                    value: serde_json::json!(1),
+                    sent_at: std::time::Instant::now(),
+                    ttl: std::time::Duration::from_secs(5),
+                },
+            );
+        }
+
+        // 1. Stale cloud poll returns lamp = 0
+        let mut cloud_data = HashMap::new();
+        cloud_data.insert("lamp".into(), serde_json::json!(0));
+        cloud_data.insert("brightness".into(), serde_json::json!(250));
+
+        let reconciled = dev.reconcile_sensors(cloud_data).await;
+        // Should preserve lamp = 1 because within TTL
+        assert_eq!(reconciled.get("lamp"), Some(&serde_json::json!(1)));
+        assert_eq!(reconciled.get("brightness"), Some(&serde_json::json!(250)));
+        // Pending command still active
+        assert!(dev.pending_commands.read().await.contains_key("lamp"));
+
+        // 2. Now cloud catches up and reports lamp = 1
+        let mut confirmed_data = HashMap::new();
+        confirmed_data.insert("lamp".into(), serde_json::json!(1));
+        let reconciled2 = dev.reconcile_sensors(confirmed_data).await;
+        assert_eq!(reconciled2.get("lamp"), Some(&serde_json::json!(1)));
+        // Pending command was cleared because cloud confirmed
+        assert!(!dev.pending_commands.read().await.contains_key("lamp"));
+    }
+}
+

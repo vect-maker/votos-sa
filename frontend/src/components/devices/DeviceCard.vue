@@ -55,7 +55,12 @@ const brightnessValue = computed<number | null>(() => {
           </div>
           <div>
             <h2 class="card-title text-base font-bold tracking-tight leading-snug">
-              {{ device.name }}
+              <RouterLink
+                :to="{ name: 'device-detail', params: { id: device.device_id } }"
+                class="hover:text-primary transition-colors focus:outline-none focus:underline"
+              >
+                {{ device.name }}
+              </RouterLink>
             </h2>
             <div class="flex items-center gap-1.5 text-xs text-base-content/60 font-mono mt-0.5">
               <span>#{{ device.device_id }}</span>

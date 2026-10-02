@@ -34,11 +34,8 @@ const router = createRouter({
 })
 
 router.afterEach((to) => {
-  const baseTitle = 'IoT Control Panel'
   if (to.meta.title && typeof to.meta.title === 'string') {
-    document.title = `${to.meta.title} | ${baseTitle}`
-  } else {
-    document.title = baseTitle
+    document.title = to.meta.title
   }
 })
 

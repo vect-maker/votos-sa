@@ -150,10 +150,12 @@ pub async fn run(args: ServeArgs) -> anyhow::Result<()> {
     let client = Arc::new(client);
 
     // 2. Discover and instantiate project & devices in memory
+    let command_ttl = tokio::time::Duration::from_millis(args.command_settle_timeout_ms);
     let project_manager = ProjectManager::init_from_cloud(
         &client,
         &project_name,
         args.project.device_namespace.as_deref(),
+        command_ttl,
     )
     .await?;
     let project_manager = Arc::new(project_manager);

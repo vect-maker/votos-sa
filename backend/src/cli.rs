@@ -54,6 +54,10 @@ pub struct ServeArgs {
     #[arg(long, env = "POLL_INTERVAL_MS", default_value_t = 2000)]
     pub poll_interval_ms: u64,
 
+    /// Grace period in milliseconds for actuator commands to prevent polling from reverting state
+    #[arg(long, env = "COMMAND_SETTLE_TIMEOUT_MS", default_value_t = 7000)]
+    pub command_settle_timeout_ms: u64,
+
     #[command(flatten)]
     pub project: ProjectArgs,
 }

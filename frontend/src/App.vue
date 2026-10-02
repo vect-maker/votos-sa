@@ -1,10 +1,24 @@
 <script setup lang="ts">
-import { onMounted, onUnmounted } from 'vue'
+import { onMounted, onUnmounted, watch } from 'vue'
 import { RouterView, RouterLink } from 'vue-router'
 import { useDevicesStore } from '@/stores/devices'
 import { Activity, RefreshCw, Layers } from '@lucide/vue'
 
 const store = useDevicesStore()
+
+let errorTimer: ReturnType<typeof setTimeout> | null = null
+
+watch(
+  () => store.error,
+  (newError) => {
+    if (errorTimer) clearTimeout(errorTimer)
+    if (newError) {
+      errorTimer = setTimeout(() => {
+        store.error = null
+      }, 8000)
+    }
+  },
+)
 
 onMounted(() => {
   store.startLiveSync()
@@ -13,6 +27,7 @@ onMounted(() => {
 
 onUnmounted(() => {
   store.stopLiveSync()
+  if (errorTimer) clearTimeout(errorTimer)
 })
 </script>
 
@@ -30,12 +45,11 @@ onUnmounted(() => {
             <Activity class="w-5 h-5" />
           </div>
           <div>
-            <div class="text-base font-bold tracking-tight flex items-center gap-2">
-              <span>IoT Control Panel</span>
-              <span class="badge badge-xs badge-primary font-normal">v1.0</span>
+            <div class="text-base font-bold tracking-tight">
+              {{ store.project?.name || 'Devices' }}
             </div>
-            <p class="text-xs text-base-content/60 font-mono">
-              {{ store.project?.name || 'Connecting...' }}
+            <p v-if="store.project?.tag" class="text-xs text-base-content/60 font-mono">
+              {{ store.project.tag }}
             </p>
           </div>
         </RouterLink>
@@ -107,7 +121,7 @@ onUnmounted(() => {
     <!-- Simple Footer -->
     <footer class="py-4 border-t border-base-300 text-center text-xs text-base-content/50">
       <div class="max-w-6xl mx-auto px-4 flex flex-col sm:flex-row items-center justify-between gap-2">
-        <span>IoT Device Management Panel</span>
+        <span class="font-mono">{{ store.project?.name || '' }}</span>
         <span class="font-mono">Project ID: {{ store.project?.project_id || '...' }}</span>
       </div>
     </footer>
