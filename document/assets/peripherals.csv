@@ -1,0 +1,9 @@
+Nombre,Tag API,Descripción / Periférico,Tipo
+Luminosidad,brightness,Sensor LDR analógico vía PCF8591 (I2C),Sensor (0 - 255)
+Servo X,servo_x,Servomotor horizontal (0° a 180°),Actuador rango
+Servo Y,servo_y,Servomotor vertical (0° a 90°),Actuador rango
+Lámpara,lamp,Iluminación principal,Actuador switch
+Ventilador,fan,Sistema de ventilación,Actuador switch
+Cerradura,lock,Cerradura electrónica,Actuador switch
+Posición Home,servo_home,"Centrado de servos a posición base (90°, 90°)",Actuador botón
+Calibrar Luz,calibrate_light,Barrido y rastreo del punto de mayor luz,Actuador botón

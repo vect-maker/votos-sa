@@ -1,0 +1,4 @@
+功能扩展模块,M3核心模块
+SEG_DATA,PB0
+SEG_SCK,PC5
+SEG_RCK,PC4

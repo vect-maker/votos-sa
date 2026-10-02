@@ -1,0 +1,153 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 950 560" width="100%" height="100%" style="background:#ffffff; font-family:'Liberation Sans', 'Noto Sans', sans-serif;">
+  <defs>
+    <filter id="shadow" x="-5%" y="-5%" width="110%" height="115%" filterUnits="userSpaceOnUse">
+      <feDropShadow dx="0" dy="3" stdDeviation="4" flood-color="#0f172a" flood-opacity="0.08"/>
+    </filter>
+    <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 1.5 L 8 5 L 0 8.5 z" fill="#475569"/>
+    </marker>
+    <marker id="arrow-blue" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 1.5 L 8 5 L 0 8.5 z" fill="#2563eb"/>
+    </marker>
+    <marker id="arrow-green" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 1.5 L 8 5 L 0 8.5 z" fill="#059669"/>
+    </marker>
+  </defs>
+
+  <!-- Title & Subtitle -->
+  <text x="475" y="32" text-anchor="middle" font-size="19" font-weight="bold" fill="#0f172a">Arquitectura Integral en Capas del Proyecto votos-sa</text>
+  <text x="475" y="52" text-anchor="middle" font-size="12" fill="#64748b">Flujo de datos, aprovisionamiento declarativo y conciliación de estado sin base de datos</text>
+
+  <!-- LAYER 1: DISPOSITIVOS (Bottom Left) -->
+  <g transform="translate(30, 80)">
+    <rect width="250" height="440" rx="12" fill="#f8fafc" stroke="#cbd5e1" stroke-width="1.5" filter="url(#shadow)"/>
+    <rect width="250" height="36" rx="12" fill="#e2e8f0"/>
+    <text x="125" y="24" text-anchor="middle" font-size="13" font-weight="bold" fill="#1e293b">1. CAPA DE DISPOSITIVOS</text>
+
+    <!-- Physical STM32 -->
+    <g transform="translate(15, 55)">
+      <rect width="220" height="175" rx="8" fill="#ffffff" stroke="#3b82f6" stroke-width="1.5"/>
+      <rect width="220" height="26" rx="8" fill="#eff6ff"/>
+      <text x="110" y="18" text-anchor="middle" font-size="11" font-weight="bold" fill="#1d4ed8">Dispositivo Físico STM32F103</text>
+      <text x="15" y="45" font-size="10" fill="#334155">• Firmware C / STM32Cube HAL</text>
+      <text x="15" y="65" font-size="10" fill="#334155">• Sensor LDR (I2C / PCF8591)</text>
+      <text x="15" y="85" font-size="10" fill="#334155">• Servomotores Pan-Tilt (PWM)</text>
+      <text x="15" y="105" font-size="10" fill="#334155">• Relés 12V (Lámpara, Fan, Lock)</text>
+      <text x="15" y="125" font-size="10" fill="#334155">• Pantalla LCD12864 gráfica</text>
+      <rect x="15" y="140" width="190" height="22" rx="4" fill="#f1f5f9" stroke="#94a3b8" stroke-width="0.8"/>
+      <text x="110" y="155" text-anchor="middle" font-size="9.5" font-weight="bold" fill="#475569">Módulo WiFi M-WiFi-A (UART)</text>
+    </g>
+
+    <!-- Emulator -->
+    <g transform="translate(15, 250)">
+      <rect width="220" height="165" rx="8" fill="#ffffff" stroke="#059669" stroke-width="1.5"/>
+      <rect width="220" height="26" rx="8" fill="#ecfdf5"/>
+      <text x="110" y="18" text-anchor="middle" font-size="11" font-weight="bold" fill="#047857">Emulador de Dispositivos (Rust)</text>
+      <text x="15" y="45" font-size="10" fill="#334155">• Módulo simulator.rs en Rust</text>
+      <text x="15" y="65" font-size="10" fill="#334155">• Interfaz TUI interactiva (Ratatui)</text>
+      <text x="15" y="85" font-size="10" fill="#334155">• Emulación en capa de red (TCP)</text>
+      <text x="15" y="105" font-size="10" fill="#334155">• Simulación de servos y brillo</text>
+      <rect x="15" y="125" width="190" height="26" rx="4" fill="#f1f5f9" stroke="#94a3b8" stroke-width="0.8"/>
+      <text x="110" y="142" text-anchor="middle" font-size="9.5" font-weight="bold" fill="#475569">Socket TCP Nativo NLE</text>
+    </g>
+  </g>
+
+  <!-- LAYER 2: NLECLOUD (Middle) -->
+  <g transform="translate(355, 80)">
+    <rect width="240" height="440" rx="12" fill="#f8fafc" stroke="#cbd5e1" stroke-width="1.5" filter="url(#shadow)"/>
+    <rect width="240" height="36" rx="12" fill="#e2e8f0"/>
+    <text x="120" y="24" text-anchor="middle" font-size="13" font-weight="bold" fill="#1e293b">2. PLATAFORMA NLECLOUD</text>
+    <text x="120" y="60" text-anchor="middle" font-size="10.5" fill="#475569" font-style="italic">Backend Central &amp; Broker IoT</text>
+
+    <!-- TCP Gateway -->
+    <g transform="translate(15, 80)">
+      <rect width="210" height="120" rx="8" fill="#ffffff" stroke="#6366f1" stroke-width="1.5"/>
+      <rect width="210" height="24" rx="8" fill="#eef2ff"/>
+      <text x="105" y="17" text-anchor="middle" font-size="10.5" font-weight="bold" fill="#4338ca">Gateway TCP de Telemetría</text>
+      <text x="15" y="45" font-size="10" fill="#334155">• Puerto TCP 8600</text>
+      <text x="15" y="65" font-size="10" fill="#334155">• Recepción tramas JSON Tipo 1,2</text>
+      <text x="15" y="85" font-size="10" fill="#334155">• Envío telemando actuadores</text>
+      <text x="15" y="105" font-size="10" fill="#334155">• Heartbeat y enlace activo</text>
+    </g>
+
+    <!-- Cloud Database & Storage -->
+    <g transform="translate(15, 220)">
+      <rect width="210" height="85" rx="8" fill="#ffffff" stroke="#64748b" stroke-width="1"/>
+      <text x="105" y="25" text-anchor="middle" font-size="10.5" font-weight="bold" fill="#334155">Almacén de Datos NLE</text>
+      <text x="15" y="48" font-size="9.5" fill="#64748b">• Persistencia histórica de tags</text>
+      <text x="15" y="66" font-size="9.5" fill="#64748b">• Estado de conexión del nodo</text>
+    </g>
+
+    <!-- REST API -->
+    <g transform="translate(15, 325)">
+      <rect width="210" height="120" rx="8" fill="#ffffff" stroke="#d97706" stroke-width="1.5"/>
+      <rect width="210" height="24" rx="8" fill="#fffbeb"/>
+      <text x="105" y="17" text-anchor="middle" font-size="10.5" font-weight="bold" fill="#b45309">API REST NLECloud</text>
+      <text x="15" y="45" font-size="10" fill="#334155">• Autenticación de usuario</text>
+      <text x="15" y="65" font-size="10" fill="#334155">• Consulta de proyectos y tags</text>
+      <text x="15" y="85" font-size="10" fill="#334155">• Inyección de comandos</text>
+      <text x="15" y="105" font-size="10" fill="#334155">• CRUD de dispositivos y sensores</text>
+    </g>
+  </g>
+
+  <!-- LAYER 3: RUST BACKEND RELAY & SOURCE OF TRUTH (Right) -->
+  <g transform="translate(670, 80)">
+    <rect width="250" height="440" rx="12" fill="#f8fafc" stroke="#cbd5e1" stroke-width="1.5" filter="url(#shadow)"/>
+    <rect width="250" height="36" rx="12" fill="#e2e8f0"/>
+    <text x="125" y="24" text-anchor="middle" font-size="12" font-weight="bold" fill="#1e293b">3. BACKEND &amp; APROVISIONADOR</text>
+
+    <!-- Declarative Source of Truth -->
+    <g transform="translate(15, 50)">
+      <rect width="220" height="95" rx="8" fill="#ffffff" stroke="#8b5cf6" stroke-width="1.5"/>
+      <rect width="220" height="22" rx="8" fill="#f5f3ff"/>
+      <text x="110" y="16" text-anchor="middle" font-size="10" font-weight="bold" fill="#6d28d9">Fuente de Verdad Declarativa</text>
+      <text x="15" y="40" font-size="9.5" fill="#334155">• seed/devices.json (definición nodos)</text>
+      <text x="15" y="58" font-size="9.5" fill="#334155">• seed/peripherals.json (sensores/act)</text>
+      <text x="15" y="78" font-size="9.5" fill="#7c3aed" font-weight="bold">• Aprovisionador Idempotente</text>
+    </g>
+
+    <!-- Rust Relay Server -->
+    <g transform="translate(15, 160)">
+      <rect width="220" height="150" rx="8" fill="#ffffff" stroke="#ea580c" stroke-width="1.5"/>
+      <rect width="220" height="24" rx="8" fill="#fff7ed"/>
+      <text x="110" y="17" text-anchor="middle" font-size="10.5" font-weight="bold" fill="#c2410c">Backend Relay en Rust (Axum)</text>
+      <text x="15" y="42" font-size="9.5" fill="#dc2626" font-weight="bold">⚠ SIN BASE DE DATOS PERSISTENTE</text>
+      <text x="15" y="60" font-size="9.5" fill="#334155">• Estado en memoria (RwLock Snapshot)</text>
+      <text x="15" y="78" font-size="9.5" fill="#334155">• Conciliador de acciones (state.rs)</text>
+      <rect x="15" y="90" width="190" height="24" rx="4" fill="#fef2f2" stroke="#ef4444" stroke-width="0.8"/>
+      <text x="110" y="106" text-anchor="middle" font-size="9" font-weight="bold" fill="#b91c1c">SDK nle-cloud-rust-sdk</text>
+      <text x="15" y="132" font-size="9" fill="#64748b">• API REST + WebSockets para UI</text>
+    </g>
+
+    <!-- Frontend UI -->
+    <g transform="translate(15, 330)">
+      <rect width="220" height="90" rx="8" fill="#ffffff" stroke="#0284c7" stroke-width="1.5"/>
+      <rect width="220" height="22" rx="8" fill="#f0f9ff"/>
+      <text x="110" y="16" text-anchor="middle" font-size="10" font-weight="bold" fill="#0369a1">4. Frontend Web (Vue 3)</text>
+      <text x="15" y="42" font-size="9.5" fill="#334155">• Dashboard reactivo (DaisyUI / Tailwind)</text>
+      <text x="15" y="60" font-size="9.5" fill="#334155">• Gráficos en tiempo real (Chart.js)</text>
+      <text x="15" y="78" font-size="9.5" fill="#334155">• Sliders de servos y control de relés</text>
+    </g>
+  </g>
+
+  <!-- CONNECTING ARROWS & DATA FLOWS -->
+  <!-- STM32 to NLE TCP -->
+  <path d="M 265 200 L 355 200" fill="none" stroke="#2563eb" stroke-width="2" marker-end="url(#arrow-blue)"/>
+  <text x="310" y="192" text-anchor="middle" font-size="9" fill="#1d4ed8" font-weight="bold">TCP :8600</text>
+
+  <!-- Simulator to NLE TCP -->
+  <path d="M 265 375 L 355 235" fill="none" stroke="#059669" stroke-width="2" marker-end="url(#arrow-green)"/>
+  <text x="305" y="295" text-anchor="middle" font-size="9" fill="#047857" font-weight="bold">TCP Sim</text>
+
+  <!-- Declarative Seeds to Provisioner/SDK -->
+  <path d="M 780 145 L 780 160" fill="none" stroke="#7c3aed" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <!-- Backend Relay <-> NLECloud REST API -->
+  <path d="M 670 230 L 595 230 L 595 385 L 565 385" fill="none" stroke="#ea580c" stroke-width="2" marker-end="url(#arrow)"/>
+  <path d="M 565 410 L 610 410 L 610 260 L 670 260" fill="none" stroke="#ea580c" stroke-width="2" marker-end="url(#arrow)"/>
+  <text x="635" y="325" text-anchor="middle" font-size="8.5" fill="#c2410c" font-weight="bold">REST API (SDK)</text>
+
+  <!-- Backend Relay <-> Frontend Web -->
+  <path d="M 780 310 L 780 330" fill="none" stroke="#0284c7" stroke-width="2" marker-start="url(#arrow)" marker-end="url(#arrow)"/>
+  <text x="815" y="323" text-anchor="middle" font-size="8.5" fill="#0369a1" font-weight="bold">HTTP/WS</text>
+</svg>

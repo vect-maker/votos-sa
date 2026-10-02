@@ -1,0 +1,4 @@
+= Descripción General
+Este proyecto consiste en el diseño e implementación de un sistema embebido de control y monitoreo en tiempo real basado en el microcontrolador STM32 conectado a la plataforma en la nube NLECloud. La totalidad del código fuente, esquemas, servicios de sincronización y plataforma web se encuentran alojados y documentados en el repositorio público de código abierto @votos-sa.
+
+El sistema integra la adquisición de señales analógicas (sensor de luz LDR mediante conversor I2C PCF8591), control de posicionamiento bidireccional con servomotores PWM para calibración y rastreo lumínico, y control digital de actuadores de potencia (relés para iluminación, ventilación y cerradura). Toda la telemetría y telemando se transmiten mediante conexión TCP y tramas JSON hacia la nube, respaldados por un backend de conciliación de estado en Rust y una interfaz web interactiva en Vue 3.
