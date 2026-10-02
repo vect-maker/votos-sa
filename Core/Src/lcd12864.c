@@ -498,13 +498,12 @@ void LCD_DispImg(unsigned char x, unsigned char y, unsigned char wid, unsigned c
 *						unsigned char x,要写入的行
 *						unsigned char lineCount,列计数，用于确定选中左或右半屏幕
 *****************************************************************************/
-void LCD_WriteChar(unsigned char x, unsigned char y, char c)
+void LCD_WriteEnglish(unsigned char x, unsigned char y, unsigned char c)
 {
     unsigned char i, line, temp;
-    unsigned char uc = (unsigned char)c;
-    if (uc < 32 || uc > 126)
-        uc = ' ';
-    uc -= 32;
+    if (c < 32 || c > 126)
+        c = ' ';
+    c -= 32;
 
     for (i = 0; i < 2; i++)
     {
@@ -516,12 +515,12 @@ void LCD_WriteChar(unsigned char x, unsigned char y, char c)
             {
                 LCD_Select(x + i, y + line); // Switch to right half screen
             }
-            LCD_WrData(font8x16[uc][line + temp]);
+            LCD_WrData(font8x16[c][line + temp]);
         }
     }
 }
 
-void LCD_WriteString(unsigned char x, unsigned char y, const char *s)
+void LCD_WriteEnglishString(unsigned char x, unsigned char y, unsigned char *s)
 {
     unsigned char lineCount = 0;
     while (*s)
@@ -534,8 +533,24 @@ void LCD_WriteString(unsigned char x, unsigned char y, const char *s)
             if (x > 6)
                 break;
         }
-        LCD_WriteChar(x, y + lineCount, *s);
+        LCD_WriteEnglish(x, y + lineCount, *s);
         lineCount += 8; // Each 8x16 character advances 8 horizontal pixels
         s++;
+    }
+}
+
+void LCD_WriteChinese(unsigned char x, unsigned char y, unsigned char *img)
+{
+    LCD_DispImg(x, y, 16, 16, img);
+}
+
+void LCD_WriteChineseString(unsigned char x, unsigned char y, unsigned char *img, unsigned char len)
+{
+    unsigned char i;
+    for (i = 0; i < len; i++)
+    {
+        LCD_WriteChinese(x, y, img);
+        y += 16;
+        img += 32;
     }
 }

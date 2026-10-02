@@ -11,11 +11,14 @@ void DrawDot_12864(unsigned char y, unsigned char x, unsigned char type);
 void LCD_DispFullImg(unsigned char *img);
 void LCD_DispImg(unsigned char x, unsigned char y, unsigned char wid, unsigned char lon, unsigned char *img);
 
-void LCD_WriteChar(unsigned char x, unsigned char y, char c);
-void LCD_WriteString(unsigned char x, unsigned char y, const char *s);
+void LCD_WriteEnglish(unsigned char x, unsigned char y, unsigned char c);
+void LCD_WriteEnglishString(unsigned char x, unsigned char y, unsigned char *s);
 
-/* Aliases for backwards compatibility */
-#define LCD_WriteEnglish(x, y, c)       LCD_WriteChar(x, y, c)
-#define LCD_WriteEnglishString(x, y, s) LCD_WriteString(x, y, (const char *)(s))
+void LCD_WriteChinese(unsigned char x, unsigned char y, unsigned char *img);
+void LCD_WriteChineseString(unsigned char x, unsigned char y, unsigned char *img, unsigned char len);
+
+/* Aliases for modern naming */
+#define LCD_WriteChar(x, y, c)       LCD_WriteEnglish((x), (y), (unsigned char)(c))
+#define LCD_WriteString(x, y, s)     LCD_WriteEnglishString((x), (y), (unsigned char *)(s))
 
 #endif // _LCD12864_H_

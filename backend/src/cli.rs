@@ -84,7 +84,6 @@ pub struct ProjectArgs {
 
     /// Path to declarative JSON file defining peripheral sets (defaults to seed/peripherals.json)
     #[arg(
-        short = 'p',
         long,
         env = "PERIPHERALS_FILE",
         default_value = "seed/peripherals.json"
@@ -186,4 +185,15 @@ pub struct SimulateArgs {
 
     #[command(flatten)]
     pub project: ProjectArgs,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::CommandFactory;
+
+    #[test]
+    fn verify_cli() {
+        Cli::command().debug_assert();
+    }
 }

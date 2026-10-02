@@ -1,14 +1,3 @@
-/* USER CODE BEGIN Header /
-/**
- ******************************************************************************
- * @file           : main.c
- * @brief          : NLE CLOUD - LAMPARA (PA1) + VENTILADOR (PA0) + LDR
- * (PCF8591)
- * @version        : 28.0 FINAL - LIGERO (MODO 100% MANUAL)
- ******************************************************************************
- */
-/* USER CODE END Header */
-
 #include "main.h"
 #include "lcd12864.h"
 #include <stdio.h>
@@ -107,6 +96,7 @@ static void MX_RTC_Init(void);
 static void MX_UART4_Init(void);
 static void MX_USART1_UART_Init(void);
 static void MX_TIM3_Init(void);
+void CalibrateServosToLight(void);
 
 /* USER CODE BEGIN 0 */
 
@@ -226,7 +216,7 @@ uint8_t ESP8266_SendSensor(char *tag, int32_t value) {
   if (build_data_upload_request(json, sizeof(json), tag, value) < 0) {
     LCD_Clr();
     LCD_WriteString(0, 0, "Err: JSON Build");
-    return -8;
+    return 0;
   }
   return SendDataToServer(json);
 }
@@ -1085,7 +1075,6 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart) {
 void SystemClock_Config(void) {
   RCC_OscInitTypeDef RCC_OscInitStruct = {0};
   RCC_ClkInitTypeDef RCC_ClkInitStruct = {0};
-  PeriphClkInit.PeriphClockSelection = RCC_PERIPHCLK_RTC;
   RCC_PeriphCLKInitTypeDef PeriphClkInit = {0};
 
   RCC_OscInitStruct.OscillatorType =
