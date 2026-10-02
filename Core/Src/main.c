@@ -27,7 +27,8 @@ TIM_HandleTypeDef htim3;
 #define WIFI_PASSWORD "IoT-Room10H"
 #define SERVER_IP "121.37.241.174"
 #define SERVER_PORT 8600
-#define DEVICE_TAG "smarthomejdmp"
+#define DEVICE_TAG "p1476967_dev1"
+#define DEVICE_ID "1542363"
 #define SECRET_KEY "726637791de84a41bf0a8c45c16afc36"
 
 /* === SENSOR & ACTUATOR TAGS (Control and state report share the same tag) ===
@@ -39,15 +40,6 @@ TIM_HandleTypeDef htim3;
 #define TAG_SERVO_X "servo_x"
 #define TAG_SERVO_Y "servo_y"
 
-/* Aliases for backwards compatibility */
-#define LDR_TAG TAG_BRIGHTNESS
-#define LAMP_TAG TAG_LAMP
-#define FAN_TAG TAG_FAN
-#define LOCK_TAG TAG_LOCK
-#define SERVO1_TAG TAG_SERVO_X
-#define SERVO2_TAG TAG_SERVO_Y
-#define SERVO1_STATE_TAG TAG_SERVO_X
-#define SERVO2_STATE_TAG TAG_SERVO_Y
 
 #define KEY2_LONG_THRESHOLD_MS 800
 
@@ -130,11 +122,29 @@ int build_connection_request(char *out_buf, size_t buf_size,
   return (n < 0 || (size_t)n >= buf_size) ? -1 : n;
 }
 
+static uint16_t g_msgid = 1;
+
 int build_data_upload_request(char *out_buf, size_t buf_size,
-                              const char *device_tag, uint8_t value) {
+                              const char *tag, int32_t value) {
   if (out_buf == NULL || buf_size == 0)
     return -1;
-  int n = sprintf(out_buf, "{\"t\":3,\"data\":{\"%s\":%d}}", device_tag, value);
+  int n = snprintf(out_buf, buf_size,
+                   "{\"t\":3,\"datatype\":1,\"datas\":{\"%s\":%d},\"msgid\":%u}",
+                   tag, (int)value, (unsigned int)g_msgid++);
+  if (g_msgid > 65000)
+    g_msgid = 1;
+
+  return (n < 0 || (size_t)n >= buf_size) ? -1 : n;
+}
+
+int build_cmd_response(char *out_buf, size_t buf_size,
+                       int32_t cmdid, uint8_t status, int32_t data) {
+  if (out_buf == NULL || buf_size == 0)
+    return -1;
+
+  int n = snprintf(out_buf, buf_size,
+                   "{\"t\":6,\"cmdid\":%ld,\"status\":%d,\"data\":%ld}",
+                   (long)cmdid, (int)status, (long)data);
 
   return (n < 0 || (size_t)n >= buf_size) ? -1 : n;
 }
@@ -209,7 +219,7 @@ uint8_t SendDataToServer(char *data) {
 
 void ESP8266_IpSend(char *data) { SendDataToServer(data); }
 
-uint8_t ESP8266_SendSensor(char *tag, uint8_t value) {
+uint8_t ESP8266_SendSensor(char *tag, int32_t value) {
   char json[128];
   if (build_data_upload_request(json, sizeof(json), tag, value) < 0) {
     LCD_Clr();
@@ -531,206 +541,163 @@ static int32_t extract_cmdid(const char *json) {
   if (!p)
     return -1;
   p += 7;
-  while (*p && *p != ':')
-    p++;
-  if (!*p)
-    return -1;
-  p++;
-  while (*p == ' ' || *p == '\t')
+  while (*p && (*p == ' ' || *p == ':' || *p == '\t'))
     p++;
   return atoi(p);
+}
+
+static int32_t extract_data_int(const char *json) {
+  const char *p = strstr(json, "\"data\"");
+  if (!p)
+    return -1;
+  p += 6;
+  while (*p && (*p == ' ' || *p == ':' || *p == '\t' || *p == '\"'))
+    p++;
+  if (*p == 't' || *p == 'T')
+    return 1;
+  if (*p == 'f' || *p == 'F')
+    return 0;
+  if (*p >= '0' && *p <= '9')
+    return atoi(p);
+  return -1;
+}
+
+static int32_t extract_tag_int(const char *json, const char *tag) {
+  char pattern[64];
+  snprintf(pattern, sizeof(pattern), "\"%s\"", tag);
+  const char *p = strstr(json, pattern);
+  if (!p)
+    return -1;
+  p += strlen(pattern);
+  while (*p && (*p == ' ' || *p == ':' || *p == '\t' || *p == '\"'))
+    p++;
+  if (*p == 't' || *p == 'T')
+    return 1;
+  if (*p == 'f' || *p == 'F')
+    return 0;
+  if (*p >= '0' && *p <= '9')
+    return atoi(p);
+  return -1;
+}
+
+static int32_t get_actuator_val(const char *json, const char *tag) {
+  char pattern[64];
+  snprintf(pattern, sizeof(pattern), "\"%s\"", tag);
+  if (!strstr(json, pattern))
+    return -1;
+  int32_t val = extract_data_int(json);
+  if (val != -1)
+    return val;
+  return extract_tag_int(json, tag);
 }
 
 void ESP8266_DataAnalysisProcess(char *RxBuf) {
   if (RxBuf[0] == '\0')
     return;
 
-  /* --- heartbeat ping (unchanged) --- */
+  /* --- Heartbeat inquiry from server (protocol fixed string) --- */
   if (strstr(RxBuf, "$#AT#") != NULL) {
     HAL_UART_Transmit(&huart4, (uint8_t *)"$OK##\r", 7, 100);
     return;
   }
 
-  /* --- only process type-5 command requests --- */
+  /* --- Only process type-5 command requests (CMD_REQ) --- */
   if (strstr(RxBuf, "\"t\":5") == NULL)
     return;
 
   int32_t cmdid = extract_cmdid(RxBuf);
   if (cmdid < 0)
-    return; // can't reply without a cmdid
+    return; // cannot respond without cmdid
 
-  /* --- parse every command present in the payload --- */
-  int8_t lamp_val = -1;
-  int8_t fan_val = -1;
-  int8_t lock_val = -1;
-  int16_t servo1_val = -1;
-  int16_t servo2_val = -1;
+  uint8_t executed = 0;
   uint8_t has_error = 0;
 
-  const char *pLamp = strstr(RxBuf, "\"" TAG_LAMP "\"");
-  if (pLamp == NULL)
-    pLamp = strstr(RxBuf, "\"nl_lamp\"");
-  if (pLamp != NULL) {
-    while (*pLamp && *pLamp != '1' && *pLamp != '0')
-      pLamp++;
-    if (*pLamp == '1') {
-      setLamp(1);
-      lamp_val = 1;
-    } else if (*pLamp == '0') {
-      setLamp(0);
-      lamp_val = 0;
+  /* 1. Lamp Actuator */
+  if (strstr(RxBuf, "\"" TAG_LAMP "\"") != NULL) {
+    int32_t val = get_actuator_val(RxBuf, TAG_LAMP);
+    if (val == 1 || val == 0) {
+      setLamp((uint8_t)val);
+      executed = 1;
     } else {
-      lamp_val = -2;
       has_error = 1;
     }
   }
 
-  const char *pFan = strstr(RxBuf, "\"" TAG_FAN "\"");
-  if (pFan == NULL)
-    pFan = strstr(RxBuf, "\"nl_fan\"");
-  if (pFan != NULL) {
-    while (*pFan && *pFan != '1' && *pFan != '0')
-      pFan++;
-    if (*pFan == '1') {
-      setFan(1);
-      fan_val = 1;
-    } else if (*pFan == '0') {
-      setFan(0);
-      fan_val = 0;
+  /* 2. Fan Actuator */
+  if (strstr(RxBuf, "\"" TAG_FAN "\"") != NULL) {
+    int32_t val = get_actuator_val(RxBuf, TAG_FAN);
+    if (val == 1 || val == 0) {
+      setFan((uint8_t)val);
+      executed = 1;
     } else {
-      fan_val = -2;
       has_error = 1;
     }
   }
 
-  const char *pLock = strstr(RxBuf, "\"" TAG_LOCK "\"");
-  if (pLock == NULL)
-    pLock = strstr(RxBuf, "\"nl_lock\"");
-  if (pLock != NULL) {
-    while (*pLock && *pLock != '1' && *pLock != '0')
-      pLock++;
-    if (*pLock == '1') {
-      setLock(1);
-      lock_val = 1;
-    } else if (*pLock == '0') {
-      setLock(0);
-      lock_val = 0;
+  /* 3. Lock Actuator */
+  if (strstr(RxBuf, "\"" TAG_LOCK "\"") != NULL) {
+    int32_t val = get_actuator_val(RxBuf, TAG_LOCK);
+    if (val == 1 || val == 0) {
+      setLock((uint8_t)val);
+      executed = 1;
     } else {
-      lock_val = -2;
       has_error = 1;
     }
   }
 
-  /* --- SERVO 1 / SERVO X --- */
-  const char *pServo1 = strstr(RxBuf, "\"" TAG_SERVO_X "\"");
-  if (pServo1 == NULL)
-    pServo1 = strstr(RxBuf, "\"nl_servo1\"");
-  if (pServo1 == NULL)
-    pServo1 = strstr(RxBuf, "\"servo1\"");
-  if (pServo1 != NULL) {
-    pServo1 = strchr(pServo1, ':');
-    if (pServo1 != NULL) {
-      while (*pServo1 && (*pServo1 < '0' || *pServo1 > '9'))
-        pServo1++;
-      int angle = atoi(pServo1);
-      if (Servo1_CommandAngle(angle)) {
-        servo1_val = angle;
-      } else {
-        servo1_val = -2;
-        has_error = 1;
-      }
+  /* 4. Servo X Actuator (0 to 180 degrees) */
+  if (strstr(RxBuf, "\"" TAG_SERVO_X "\"") != NULL) {
+    int32_t val = get_actuator_val(RxBuf, TAG_SERVO_X);
+    if (val >= SERVO1_MIN_ANGLE && val <= SERVO1_MAX_ANGLE) {
+      Servo1_SetAngle((uint16_t)val);
+      executed = 1;
+    } else {
+      has_error = 1;
     }
   }
 
-  /* --- SERVO 2 / SERVO Y --- */
-  const char *pServo2 = strstr(RxBuf, "\"" TAG_SERVO_Y "\"");
-  if (pServo2 == NULL)
-    pServo2 = strstr(RxBuf, "\"nl_servo2\"");
-  if (pServo2 == NULL)
-    pServo2 = strstr(RxBuf, "\"servo2\"");
-  if (pServo2 != NULL) {
-    pServo2 = strchr(pServo2, ':');
-    if (pServo2 != NULL) {
-      while (*pServo2 && (*pServo2 < '0' || *pServo2 > '9'))
-        pServo2++;
-      int angle = atoi(pServo2);
-      if (Servo2_CommandAngle(angle)) {
-        servo2_val = angle;
-      } else {
-        servo2_val = -2;
-        has_error = 1;
-      }
+  /* 5. Servo Y Actuator (0 to 90 degrees) */
+  if (strstr(RxBuf, "\"" TAG_SERVO_Y "\"") != NULL) {
+    int32_t val = get_actuator_val(RxBuf, TAG_SERVO_Y);
+    if (val >= SERVO2_MIN_ANGLE && val <= SERVO2_MAX_ANGLE) {
+      Servo2_SetAngle((uint16_t)val);
+      executed = 1;
+    } else {
+      has_error = 1;
     }
   }
 
-  /* --- HOME --- */
+  /* 6. Home command */
   if (strstr(RxBuf, "\"solar_home\"") != NULL) {
-    Servo_CommandHome();
-    servo1_val = servo1_angle;
-    servo2_val = servo2_angle;
+    Servo_Home();
+    executed = 1;
   }
 
-  if (lamp_val == -1 && fan_val == -1 && lock_val == -1 && servo1_val == -1 &&
-      servo2_val == -1)
+  if (!executed && !has_error)
     return;
 
-  /* --- build combined "data" object using defined tag strings --- */
-  char data_obj[256];
-  int pos = 0;
-  pos += snprintf(data_obj + pos, sizeof(data_obj) - pos, "{");
-
-  int first = 1;
-  if (lamp_val != -1) {
-    if (!first)
-      pos += snprintf(data_obj + pos, sizeof(data_obj) - pos, ",");
-    first = 0;
-    pos += snprintf(data_obj + pos, sizeof(data_obj) - pos,
-                    "\"" TAG_LAMP "\":%d", lamp_val);
-  }
-  if (fan_val != -1) {
-    if (!first)
-      pos += snprintf(data_obj + pos, sizeof(data_obj) - pos, ",");
-    first = 0;
-    pos += snprintf(data_obj + pos, sizeof(data_obj) - pos,
-                    "\"" TAG_FAN "\":%d", fan_val);
-  }
-  if (lock_val != -1) {
-    if (!first)
-      pos += snprintf(data_obj + pos, sizeof(data_obj) - pos, ",");
-    first = 0;
-    pos += snprintf(data_obj + pos, sizeof(data_obj) - pos,
-                    "\"" TAG_LOCK "\":%d", lock_val);
+  /* --- Step A: Send Command Response (t: 6) as required by NLECloud protocol --- */
+  char cmd_resp[64];
+  if (build_cmd_response(cmd_resp, sizeof(cmd_resp), cmdid, has_error ? 1 : 0, 0) > 0) {
+    SendDataToServer(cmd_resp);
   }
 
-  /* === SERVO STATES (actuator state matches actuator tag) === */
-  if (!first)
-    pos += snprintf(data_obj + pos, sizeof(data_obj) - pos, ",");
-  first = 0;
-  pos += snprintf(data_obj + pos, sizeof(data_obj) - pos,
-                  "\"" TAG_SERVO_X "\":%d", (int)servo1_angle);
+  /* --- Step B: In NLECloud, the actuator automatically creates a state with the same name.
+                 Report current state using t: 3 so cloud dashboard reflects changes immediately. --- */
+  char state_upload[256];
+  snprintf(state_upload, sizeof(state_upload),
+           "{\"t\":3,\"datatype\":1,\"datas\":{\"%s\":%d,\"%s\":%d,\"%s\":%d,\"%s\":%d,\"%s\":%d,\"%s\":%d},\"msgid\":%u}",
+           TAG_LAMP, (int)lampState,
+           TAG_FAN, (int)fanState,
+           TAG_LOCK, (int)lockState,
+           TAG_SERVO_X, (int)servo1_angle,
+           TAG_SERVO_Y, (int)servo2_angle,
+           TAG_BRIGHTNESS, (int)valorLDR,
+           (unsigned int)g_msgid++);
+  if (g_msgid > 65000)
+    g_msgid = 1;
 
-  if (!first)
-    pos += snprintf(data_obj + pos, sizeof(data_obj) - pos, ",");
-  first = 0;
-  pos += snprintf(data_obj + pos, sizeof(data_obj) - pos,
-                  "\"" TAG_SERVO_Y "\":%d", (int)servo2_angle);
-
-  /* === BRIGHTNESS: light sensor state === */
-  if (!first)
-    pos += snprintf(data_obj + pos, sizeof(data_obj) - pos, ",");
-  first = 0;
-  pos += snprintf(data_obj + pos, sizeof(data_obj) - pos,
-                  "\"" TAG_BRIGHTNESS "\":%d", (int)valorLDR);
-
-  pos += snprintf(data_obj + pos, sizeof(data_obj) - pos, "}");
-
-  /* --- response --- */
-  char resp[512];
-  snprintf(resp, sizeof(resp),
-           "{\"t\":3,\"datatype\":1,\"status\":%d,\"datas\":%s}",
-           has_error ? 1 : 0, data_obj);
-
-  ESP8266_IpSend(resp);
+  SendDataToServer(state_upload);
 }
 /* USER CODE END 0 */
 
@@ -949,9 +916,9 @@ int main(void) {
         }
       }
 
-      /* TAREA 2: Ping a NLE Cloud cada 30s */
+      /* TAREA 2: Ping a NLE Cloud cada 30s (Heartbeat) */
       if ((now - last_heartbeat) > 30000) {
-        SendDataToServer((char *)"{\"t\":2}");
+        SendDataToServer((char *)"$#AT#\r");
         last_heartbeat = now;
       }
 
